@@ -1,0 +1,56 @@
+version: "3"
+
+vars:
+  BINARY: bin/claude-notify
+  CMD: ./cmd/claude-notify
+
+tasks:
+  build:
+    desc: Compile the claude-notify binary
+    cmds:
+      - go build -o {{.BINARY}} {{.CMD}}
+
+  dev:
+    desc: Build and install binary to bin/
+    cmds:
+      - task: build
+    generates:
+      - "{{.BINARY}}"
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test ./...
+
+  lint:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  link:
+    desc: Symlink repo into ~/.tmux/plugins/tmux-claude-notify for local development
+    vars:
+      PLUGIN_DIR: "{{.HOME}}/.tmux/plugins/tmux-claude-notify"
+    cmds:
+      - mkdir -p "{{.HOME}}/.tmux/plugins"
+      - |
+        if [ -L "{{.PLUGIN_DIR}}" ]; then
+          echo "already linked: {{.PLUGIN_DIR}} -> $(readlink {{.PLUGIN_DIR}})"
+        elif [ -e "{{.PLUGIN_DIR}}" ]; then
+          echo "error: {{.PLUGIN_DIR}} exists and is not a symlink — remove it manually"
+          exit 1
+        else
+          ln -s "$(pwd)" "{{.PLUGIN_DIR}}"
+          echo "linked: {{.PLUGIN_DIR}} -> $(pwd)"
+        fi
+
+  setup:
+    desc: Verify development dependencies and link plugin directory
+    cmds:
+      - cmd: which go
+        silent: false
+      - cmd: which tmux
+        silent: false
+      - cmd: go version
+      - cmd: tmux -V
+      - task: link
