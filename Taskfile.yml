@@ -17,6 +17,12 @@ tasks:
     generates:
       - "{{.BINARY}}"
 
+  run:
+    desc: Build and run the claude-notify binary
+    cmds:
+      - task: build
+      - ./{{.BINARY}}
+
   test:
     desc: Run all tests
     cmds:

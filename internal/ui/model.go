@@ -107,16 +107,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.entries) > 0 {
 				selected := m.entries[m.cursor]
 				_ = store.ClearPane(selected.record.Pane)
+				_ = tmuxclient.ClearWindowStyle(selected.record.Window)
+				_ = tmuxclient.ClearPopStyle(selected.record.Window)
+				_ = tmuxclient.UnregisterClearHook(selected.record.Pane)
 				_ = tmuxclient.SelectWindow(selected.record.Session, selected.record.Window)
 				m.entries = loadEntries()
 				if m.cursor >= len(m.entries) {
 					m.cursor = max(0, len(m.entries)-1)
 				}
-				if len(m.entries) == 0 {
-					m.watcher.Close()
-					m.quitting = true
-					return m, tea.Quit
-				}
+				// Close the grimoire popup but keep the binary running so
+				// C-M-p can re-attach to the same instance with the updated list.
+				// In popup fallback (not shpell) this is a no-op.
+				_ = tmuxclient.DetachIfShpell()
 			}
 		}
 	}
