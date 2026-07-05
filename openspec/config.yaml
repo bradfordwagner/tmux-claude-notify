@@ -1,0 +1,9 @@
+schema: spec-driven
+
+context: |
+  Tech stack: bash shell scripts, TPM (tmux plugin manager) convention; Go binary optional if needed
+  Conventional commits (feat/fix/docs/chore)
+  Target: Linux/WSL with tmux, Claude Code CLI (interactive foreground sessions only)
+  Domain: tmux plugin that highlights a window and sends a desktop notification when
+  an interactive `claude` session finishes a response and is waiting for user input.
+  Non-goal: background agent / fleet-view integration.
