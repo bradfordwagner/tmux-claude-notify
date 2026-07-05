@@ -70,7 +70,10 @@ func ClearPopStyle(windowID string) error {
 
 func RegisterClearHook(paneID, binaryPath string) error {
 	idx := strings.TrimPrefix(paneID, "%")
-	hookCmd := fmt.Sprintf("run-shell '%s clear --pane %s'", binaryPath, paneID)
+	// pane-focus-in[N] fires for ANY pane focus — the index is not a pane filter.
+	// Use if-shell -F to guard so clear only runs when the focused pane matches.
+	hookCmd := fmt.Sprintf("if-shell -F '#{==:#{pane_id},%s}' 'run-shell \"%s clear --pane %s\"'",
+		paneID, binaryPath, paneID)
 	_, err := run("set-hook", "-a", fmt.Sprintf("pane-focus-in[%s]", idx), hookCmd)
 	return err
 }

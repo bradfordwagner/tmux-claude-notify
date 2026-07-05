@@ -19,8 +19,10 @@ tasks:
 
   run:
     desc: Build and run the claude-notify binary
+    aliases: [r]
     cmds:
       - task: build
+      - clear
       - ./{{.BINARY}}
 
   test:
