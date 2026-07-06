@@ -6,8 +6,8 @@
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Shell session (the pane running `claude`)                           │
 │                                                                      │
-│  claude process ──Stop──────────► ~/.claude/settings.json hooks     │
-│               └──PreToolUse──►    └─► bin/claude-notify notify      │
+│  claude process ──Stop──► ~/.claude/settings.json hook              │
+│                            └─► bin/claude-notify notify             │
 │                                         │                            │
 │                                         │  $TMUX_PANE (inherited)   │
 │                                         ▼                            │
@@ -49,7 +49,7 @@ User invokes keybinding (C-M-p by default):
 ## Data Flow: Notification Lifecycle
 
 ```
- Stop or PreToolUse hook fires
+ Stop hook fires
       │
       ▼
  claude-notify notify
@@ -83,16 +83,15 @@ User invokes keybinding (C-M-p by default):
 
 ## Hook Configuration
 
-Two hooks in `~/.claude/settings.json` call `claude-notify notify`:
+One hook in `~/.claude/settings.json` calls `claude-notify notify`:
 
 | Hook | When it fires |
 |---|---|
 | `Stop` | Claude finishes its response turn and returns to the user prompt |
-| `PreToolUse` | Before any tool call executes (fires mid-turn as Claude works) |
 
-`PreToolUse` ensures notifications appear as soon as Claude begins a tool-heavy
-turn, not only after the full response completes. Both hooks call the same
-`notify` subcommand; idempotency prevents duplicate JSONL entries.
+The `hookEvents` slice in `setup.go` is the single source of truth for which
+events are registered — adding a name there includes it in both check and
+configure paths.
 
 ## File Layout
 
@@ -124,5 +123,5 @@ DEVELOPMENT.md                 ordered development items
 | Dashboard keybinding | grimoire shpell if present, `display-popup` fallback | grimoire provides native toggle (C-M-p again to close); popup requires explicit q/esc |
 | Dashboard selection | stay open until list empty, then DetachIfShpell | allows handling multiple pending notifications in one session |
 | Auto-clear hook | none (removed) | pane-focus-in broken in WSL2; after-select-window fires on any tmux command |
-| Idempotent notify | `HasUnclearedPane` before Append | Stop + PreToolUse both fire multiple times per turn; only first creates JSONL entry |
-| Hooks registered | Stop + PreToolUse | Stop = end of turn; PreToolUse = start of tool work; together cover all "claude needs attention" moments |
+| Idempotent notify | `HasUnclearedPane` before Append | Stop fires multiple times per skill invocation; only first call creates JSONL entry |
+| Hook registered | Stop only | PreToolUse causes premature notifications while claude is still working; Stop fires at the right "needs user attention" moment |

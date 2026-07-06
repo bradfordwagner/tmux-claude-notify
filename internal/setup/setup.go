@@ -62,7 +62,7 @@ func Check() Result {
 }
 
 // hookEvents lists all event types this plugin registers.
-var hookEvents = []string{"Stop", "PreToolUse"}
+var hookEvents = []string{"Stop"}
 
 // Configure adds Stop and PreToolUse hooks to settings.json if missing,
 // creating the file if it does not exist. Returns a message describing what happened.

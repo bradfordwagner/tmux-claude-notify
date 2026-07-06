@@ -13,9 +13,9 @@ tmux-claude-notify.tmux        # TPM entry point: compiles binary, registers key
 bin/claude-notify              # compiled Go binary (gitignored)
 cmd/claude-notify/main.go      # binary entry point + subcommand routing
 internal/
-  store/store.go               # JSONL notification log (Append, ReadAll, ClearPane)
+  store/store.go               # JSONL notification log (Append, ReadAll, ClearPane, HasUnclearedPane)
   tmux/tmux.go                 # tmux command helpers
-  setup/setup.go               # ~/.claude/settings.json hook check
+  setup/setup.go               # ~/.claude/settings.json hook check + auto-configure
   ui/model.go                  # bubbletea dashboard TUI
 Taskfile.yml                   # build / dev / test / lint / setup tasks
 architecture.md                # canonical architecture diagram (update with every change)
@@ -30,10 +30,13 @@ The binary owns the full hook path — there are no bash scripts in the notifica
 When `claude` finishes a response and returns to the prompt, the Claude Code `Stop` hook fires.
 `bin/claude-notify notify` (invoked by the Stop hook):
 1. Reads `$TMUX_PANE` (inherited env from the shell that launched `claude`) to identify the window
-2. Sets a persistent window-tab highlight (`#AD8EE6,bold`) in the tmux status bar
-3. Fires `notify-send` for a desktop notification (if available)
-4. Registers a one-shot `pane-focus-in` hook calling `claude-notify clear --pane <id>` to clear the indicator
-5. Appends a record to `~/.local/share/tmux-claude-notify/notifications.jsonl`
+2. Checks `~/.local/share/tmux-claude-notify/notifications.jsonl` for an existing uncleared entry for this pane — if one exists, re-applies styles and returns (idempotent; prevents duplicate entries from rapid hook firings)
+3. Sets `window-status-style` and `window-status-current-style` to `fg=#AD8EE6,bold` on the window
+4. Sets `window-active-style bg=<color>` (pane background pop)
+5. Fires `notify-send` for a desktop notification (if available)
+6. Appends a record to `~/.local/share/tmux-claude-notify/notifications.jsonl`
+
+Notifications are cleared explicitly by selecting them in the dashboard — there is no auto-clear hook (pane-focus-in is broken in WSL2; after-select-window fires on any tmux command).
 
 ### Claude Code hook setup (in ~/.claude/settings.json)
 
@@ -112,6 +115,6 @@ Used in bradfordwagner's devtainer dotfiles:
 
 - Shell scripts: `#!/usr/bin/env bash`; hook scripts must not exit non-zero noisily (tmux logs errors)
 - `notify-send` for Linux/WSL; guard with `command -v notify-send` for portability
-- TPM plugin entry point stays thin — logic lives in `scripts/`
+- TPM plugin entry point stays thin — all logic lives in the Go binary
 - No timeouts on the visual indicator; persists until user acknowledges
 - **All changes must update architecture diagrams** — any modification to data flow, component boundaries, or hook wiring must be reflected in the relevant diagram(s) before the change is considered complete

@@ -1,90 +1,90 @@
 # tmux-claude-notify
 
-A [TPM](https://github.com/tmux-plugins/tpm) plugin that provides persistent visual notifications in tmux when an interactive `claude` session is waiting for user input.
+A [TPM](https://github.com/tmux-plugins/tpm) plugin that provides persistent visual notifications in tmux when an interactive `claude` (Claude Code) session needs your attention.
 
-When Claude Code finishes a response, your tmux window tab lights up in a distinctive color. Press the configured keybinding to open a dashboard showing all pending notifications and jump to any waiting session.
+The indicator stays until you acknowledge it — no timeout, no auto-dismiss.
 
-## Features
+## What it does
 
-- Window tab highlight (`#AD8EE6`) persists until you return to the pane
-- Optional desktop notification via `notify-send`
-- Interactive dashboard (bubbletea TUI) listing all pending notifications sorted by recency
-- Configurable keybinding via TPM option
-- No external runtime dependencies beyond `tmux` (and optionally `notify-send`)
+- **Tab highlight** — the tmux window tab turns purple (`#AD8EE6`) when claude is working or waiting
+- **Pane background pop** — the pane background changes color to draw your eye (configurable)
+- **Dashboard** — a bubbletea TUI listing all pending notifications with session, window, and age
+- **Desktop notification** — fires `notify-send` if available (Linux/WSL)
+- **Auto-configures** — wires Claude Code hooks into `~/.claude/settings.json` on first launch
+
+Notifications fire when claude finishes a response and returns to the prompt (`Stop` hook).
 
 ## Requirements
 
 - tmux
-- Go (build-time only — for compiling the binary)
-- `notify-send` (optional, for desktop notifications)
+- Go (build-time only — compiled automatically by the TPM entry point)
+- Claude Code CLI
 
 ## Installation
 
-### 1. Add to TPM in `tmux.conf`
+### TPM
+
+Add to your `tmux.conf`:
 
 ```tmux
 set -g @plugin 'bradfordwagner/tmux-claude-notify'
-
-# Optional: override the default keybinding (default is M-p / C-M-p)
-# set -g @claude-notify-key 'M-p'
 ```
 
-### 2. Wire the Stop hook in `~/.claude/settings.json`
+Then press `prefix + I` to install.
+
+### Manual
+
+```bash
+git clone https://github.com/bradfordwagner/tmux-claude-notify \
+  ~/.tmux/plugins/tmux-claude-notify
+~/.tmux/plugins/tmux-claude-notify/tmux-claude-notify.tmux
+```
+
+## Hook setup
+
+The plugin auto-configures `~/.claude/settings.json` on first dashboard open. To configure manually:
 
 ```json
 {
   "hooks": {
-    "Stop": [
-      {
-        "type": "command",
-        "command": "~/.tmux/plugins/tmux-claude-notify/bin/claude-notify notify"
-      }
-    ]
+    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "/path/to/bin/claude-notify notify"}]}]
   }
 }
 ```
 
-### 3. Reload TPM
-
-Press `<prefix> + I` to install and compile the plugin.
-
----
-
-## Local Development Installation
-
-To use a local checkout instead of the TPM-installed version:
-
-```bash
-task setup   # links repo into ~/.tmux/plugins/tmux-claude-notify and verifies deps
-task build   # compile bin/claude-notify
-```
-
-`task setup` creates a symlink at `~/.tmux/plugins/tmux-claude-notify` pointing at your working directory. TPM will use it as-is, and `task build` recompiles in place. No need to reinstall via TPM after code changes — just rebuild.
-
-Add to `tmux.conf` using the local path directly if you want to bypass TPM entirely:
-
-```tmux
-run-shell "~/.tmux/plugins/tmux-claude-notify/tmux-claude-notify.tmux"
-```
+Replace `/path/to/bin/claude-notify` with the actual path (e.g. `~/.tmux/plugins/tmux-claude-notify/bin/claude-notify`).
 
 ## Usage
 
-| Action | What happens |
+Press `C-M-p` (default) to open the notification dashboard. Select an entry with enter to jump to that window and clear the notification.
+
+| Action | Result |
 |---|---|
-| Claude finishes a response | Window tab highlights in `#AD8EE6`; optional desktop notification fires |
-| Focus the notified pane | Highlight clears automatically |
-| Press `C-M-p` (or your configured key) | Opens the notification dashboard |
-| Select an entry in the dashboard | Switches to that window and clears the notification |
+| Claude finishes a response | Tab highlights; pane background changes |
+| Press `C-M-p` | Dashboard opens showing all pending notifications |
+| Select an entry (enter) | Switches to that window, clears the notification, closes popup |
+| `q` / `esc` | Close dashboard without clearing |
 
-## Development
+## Configuration
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for implementation order and status.
-See [architecture.md](architecture.md) for the full architecture diagram and design decisions.
+| Option | Default | Description |
+|---|---|---|
+| `@claude-notify-key` | `C-M-p` | Keybinding to open the dashboard |
+| `@claude-notify-pop-color` | `#1e1e2e` | Pane background color when waiting (falls back to `@tmux-pop-color`, then `#1e1e2e`) |
 
-### Quick start
+## Grimoire integration
+
+If [tmux-grimoire](https://github.com/bradfordwagner/tmux-grimoire) is installed, the dashboard opens as a toggleable shpell popup — press `C-M-p` again to close it. Without grimoire, a standard `display-popup` is used.
+
+## Local development
 
 ```bash
-task setup   # verify Go and tmux are on PATH
 task build   # compile bin/claude-notify
+task r       # build, clear screen, and run the dashboard
 task test    # run tests
 ```
+
+## Reference
+
+- [architecture.md](architecture.md) — component diagram, data flow, design decisions
+- [DEVELOPMENT.md](DEVELOPMENT.md) — implementation status and task list

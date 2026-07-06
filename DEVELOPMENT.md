@@ -8,7 +8,7 @@ Implementation order follows dependency constraints: scaffolding and storage fir
 - [x] 1.2 Create `cmd/claude-notify/main.go` entry point with subcommand routing (`notify`, `clear`, default dashboard)
 - [x] 1.3 Add Go dependencies: `bubbletea`, `lipgloss` for TUI
 - [x] 1.4 Create `Taskfile.yml` with tasks: `build`, `dev`, `test`, `lint`, `setup`
-- [ ] 1.5 Create `README.md`
+- [x] 1.5 Create `README.md`
 
 ## 2. Notification Log
 
@@ -37,10 +37,10 @@ Implementation order follows dependency constraints: scaffolding and storage fir
 
 ## 5. Hook setup check
 
-- [x] 5.1 Read `~/.claude/settings.json`, locate `hooks.Stop` and `hooks.PreToolUse` arrays
-- [x] 5.2 Detect whether both hooks point at `claude-notify notify`; auto-configure if either is missing
+- [x] 5.1 Read `~/.claude/settings.json`, locate `hooks.Stop` array
+- [x] 5.2 Detect whether Stop hook points at `claude-notify notify`; auto-configure if missing
 - [x] 5.3 Handle missing file and malformed JSON as distinct states
-- [x] 5.4 Dashboard status indicator shows `[Stop,PreToolUse] hooks configured`
+- [x] 5.4 Dashboard status indicator shows `[Stop] hooks configured`
 
 ## 6. Dashboard TUI
 
@@ -62,5 +62,5 @@ Implementation order follows dependency constraints: scaffolding and storage fir
 
 - [x] 8.1 `architecture.md` — canonical architecture diagram and design decisions
 - [x] 8.2 `DEVELOPMENT.md` — this file
-- [ ] 8.3 Link `architecture.md` and `DEVELOPMENT.md` from `README.md`
-- [ ] 8.4 Update `CLAUDE.md` plugin structure section
+- [x] 8.3 Link `architecture.md` and `DEVELOPMENT.md` from `README.md`
+- [x] 8.4 Update `CLAUDE.md` plugin structure section
