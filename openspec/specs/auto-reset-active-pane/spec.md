@@ -31,14 +31,16 @@ When `claude-notify notify` is invoked and the notified pane is both (a) the act
 - **THEN** no auto-reset subprocess is spawned regardless of pane focus state
 
 ### Requirement: Auto-reset subprocess clears notification after delay
-The `claude-notify auto-reset` subcommand SHALL sleep for the specified delay, then check two conditions before clearing: (1) the JSONL entry for the given pane is still uncleared, and (2) the dashboard popup (`_shpell-session`) is NOT currently open. If either check fails, the subprocess exits without modifying the store or tmux styles. If both conditions are met, it SHALL call `ClearPane` on the store and unset `window-status-style`, `window-status-current-style`, and `window-active-style` on the window.
+The `claude-notify auto-reset` subcommand SHALL sleep for the specified delay, then check two conditions before clearing: (1) the JSONL entry for the given pane is still uncleared, and (2) the dashboard popup (`_shpell-session`) is NOT currently open. If either check fails, the subprocess exits without modifying the store or tmux styles. If both conditions are met, it SHALL call `ClearPane` on the store, then call `store.UnclearedForWindow(windowID)` — only if that returns empty SHALL it unset `window-status-style` and `window-status-current-style` on the window. The pane background pop SHALL always be cleared per-pane via `select-pane -t <paneID> -P ""` regardless of sibling notifications.
 
 #### Scenario: Entry still uncleared and popup closed — cleared automatically
 - **WHEN** the auto-reset subprocess wakes after N seconds
 - **AND** the store still has an uncleared entry for the pane
 - **AND** `tmux.IsShpellOpen()` returns `false`
 - **THEN** `ClearPane` is called, removing the JSONL entry
-- **AND** window tab styles and pane background pop are unset
+- **AND** `select-pane -t <paneID> -P ""` is called to clear the pane background pop
+- **AND** if no other uncleared entries remain for the same window, `window-status-style` and `window-status-current-style` are unset via `set-option -u`
+- **AND** if sibling panes in the same window still have uncleared entries, window tab styles are NOT cleared
 
 #### Scenario: Entry still uncleared but popup is open — skipped
 - **WHEN** the auto-reset subprocess wakes after N seconds

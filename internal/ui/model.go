@@ -160,11 +160,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if len(m.entries) > 0 {
 				selected := m.entries[m.cursor]
-				_ = store.ClearPane(selected.record.Pane)
-				_ = tmuxclient.ClearWindowStyle(selected.record.Window)
-				_ = tmuxclient.ClearPopStyle(selected.record.Window)
-				_ = tmuxclient.UnregisterClearHook(selected.record.Pane)
-				_ = tmuxclient.SelectWindow(selected.record.Session, selected.record.Window)
+				paneID := selected.record.Pane
+				windowID := selected.record.Window
+				_ = tmuxclient.ClearPopStyle(paneID)
+				_ = tmuxclient.UnregisterClearHook(paneID)
+				_ = store.ClearPane(paneID)
+				remaining, _ := store.UnclearedForWindow(windowID)
+				if len(remaining) == 0 {
+					_ = tmuxclient.ClearWindowStyle(windowID)
+				}
+				_ = tmuxclient.SelectWindow(selected.record.Session, windowID)
 				m.entries = loadEntries()
 				if m.cursor >= len(m.entries) {
 					m.cursor = max(0, len(m.entries)-1)
@@ -286,9 +291,12 @@ func watcherCmd(tw *watcher.Watcher) tea.Cmd {
 // applyStateChange updates the JSONL store and tmux styles for a watcher event.
 func applyStateChange(sc watcher.StateChange) {
 	if sc.Clear {
+		_ = tmuxclient.ClearPopStyle(sc.PaneID)
 		_ = store.ClearPane(sc.PaneID)
-		_ = tmuxclient.ClearWindowStyle(sc.WindowID)
-		_ = tmuxclient.ClearPopStyle(sc.WindowID)
+		remaining, _ := store.UnclearedForWindow(sc.WindowID)
+		if len(remaining) == 0 {
+			_ = tmuxclient.ClearWindowStyle(sc.WindowID)
+		}
 		return
 	}
 	has, _ := store.HasUnclearedPane(sc.PaneID)
@@ -339,10 +347,14 @@ func loadEntries() []entry {
 	seen := make(map[string]bool)
 	var entries []entry
 	for _, r := range records { // records already sorted newest-first
-		if !r.Cleared && liveSet[r.Pane] && !seen[r.Pane] {
+		if !r.Cleared && !seen[r.Pane] {
 			seen[r.Pane] = true
 			p, _ := tmuxclient.PanePath(r.Pane)
-			entries = append(entries, entry{record: r, Path: trimPath(p, home)})
+			path := trimPath(p, home)
+			if path == "" && !liveSet[r.Pane] {
+				path = "(gone)"
+			}
+			entries = append(entries, entry{record: r, Path: path})
 		}
 	}
 	return entries

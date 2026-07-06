@@ -56,9 +56,11 @@ func ClearWindowStyle(windowID string) error {
 	return err
 }
 
-// SetPopStyle sets a persistent pane background highlight. Reads @claude-notify-pop-color
-// first, then falls back to @tmux-pop-color, then a dark purple default. Stays until ClearPopStyle.
-func SetPopStyle(windowID string) error {
+// SetPopStyle sets a persistent background highlight on the specific pane. Uses
+// select-pane -P so only the notified pane is highlighted, not whichever pane
+// happens to be focused when the hook fires. Reads @claude-notify-pop-color first,
+// then falls back to @tmux-pop-color, then a dark purple default.
+func SetPopStyle(paneID string) error {
 	color, _ := run("show-option", "-gqv", "@claude-notify-pop-color")
 	if color == "" {
 		color, _ = run("show-option", "-gqv", "@tmux-pop-color")
@@ -67,12 +69,12 @@ func SetPopStyle(windowID string) error {
 		// Catppuccin Mocha base — visible against a pure-black terminal background.
 		color = "#1e1e2e"
 	}
-	_, err := run("set-option", "-t", windowID, "window-active-style", "bg="+color)
+	_, err := run("select-pane", "-t", paneID, "-P", "bg="+color)
 	return err
 }
 
-func ClearPopStyle(windowID string) error {
-	_, err := run("set-option", "-u", "-t", windowID, "window-active-style")
+func ClearPopStyle(paneID string) error {
+	_, err := run("select-pane", "-t", paneID, "-P", "")
 	return err
 }
 

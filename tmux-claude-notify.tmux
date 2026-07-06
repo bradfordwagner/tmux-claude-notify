@@ -19,7 +19,7 @@ fi
 
 # Read configurable keybinding (default: C-M-p)
 key=$(tmux show-option -gqv "@claude-notify-key")
-key="${key:-M-p}"
+key="${key:-C-M-p}"
 
 # Use grimoire's custom_shpell if installed (check by path to avoid TPM load-order issues).
 # Grimoire handles toggle by detecting _shpell-session and calling detach-client.

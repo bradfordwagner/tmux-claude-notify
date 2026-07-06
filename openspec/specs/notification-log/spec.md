@@ -17,8 +17,8 @@ The JSONL record struct SHALL include a `status` field (string) representing the
 - **WHEN** a JSONL record is read that has no `status` field
 - **THEN** the parsed record's status defaults to `waiting`
 
-#### Scenario: Running record does not set window highlight
-- **WHEN** a record with `status: running` is appended
+#### Scenario: Running status does not set window highlight
+- **WHEN** a pane's status is updated to `running` via `UpdateStatus` (set by the transcript watcher; the notify subcommand never appends running records)
 - **THEN** the window tab is NOT highlighted (running is informational only)
 
 #### Scenario: Waiting record sets window highlight
@@ -49,3 +49,21 @@ When the auto-reset subprocess fires and finds an uncleared entry for the pane, 
 - **WHEN** the auto-reset subprocess fires
 - **AND** no uncleared entry exists for the pane (already dismissed manually)
 - **THEN** `ClearPane` is NOT called and the JSONL file is not modified
+
+### Requirement: Store exposes UnclearedForWindow for window-scoped notification check
+The store SHALL provide `UnclearedForWindow(windowID string) ([]Record, error)` that returns all uncleared records whose `window` field matches the given window ID. This is used by `runClear` to determine whether window-level tmux styles should be torn down after clearing a single pane's entry.
+
+#### Scenario: Returns remaining notifications for window
+- **WHEN** `UnclearedForWindow("%W3")` is called
+- **AND** pane `%1` in window `%W3` has an uncleared entry and pane `%2` in `%W3` also has an uncleared entry
+- **AND** pane `%1`'s entry was just cleared via `ClearPane`
+- **THEN** `UnclearedForWindow` returns one record (pane `%2`'s entry)
+
+#### Scenario: Returns empty slice when all panes in window are cleared
+- **WHEN** all panes in a window have had their entries cleared
+- **THEN** `UnclearedForWindow` returns an empty slice
+- **AND** the caller MAY proceed to clear window-level tmux styles
+
+#### Scenario: Returns empty slice when window has no entries
+- **WHEN** `UnclearedForWindow` is called for a window with no entries in the JSONL
+- **THEN** it returns an empty slice without error

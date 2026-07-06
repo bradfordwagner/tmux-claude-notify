@@ -1,10 +1,4 @@
-# Spec: window-highlight
-
-## Purpose
-
-Visual indicator on the tmux window tab and pane background when claude is waiting for input. Persists until explicitly cleared via the dashboard, or — for a notification on the currently focused pane — until the auto-reset timer fires. Non-focused panes have no auto-clear; they require explicit dashboard dismissal.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Window tab is highlighted when claude is waiting
 When `claude-notify notify` is invoked, the tmux window containing the notified pane SHALL have both `window-status-style` and `window-status-current-style` set to `fg=#AD8EE6,bold` so the tab is visually distinct whether or not the user is currently on that window.
@@ -86,16 +80,3 @@ When `claude-notify notify` is invoked, `select-pane -t <paneID> -P bg=<color>` 
 #### Scenario: Pop error is non-fatal
 - **WHEN** `select-pane -P` fails for any reason
 - **THEN** `claude-notify notify` continues and returns success (cosmetic only)
-
-### Requirement: Notify is idempotent across multiple hook firings
-The Stop hook fires multiple times per claude turn. The notify subcommand SHALL check for an existing uncleared entry via `store.HasUnclearedPane` before appending a new record. If an uncleared entry already exists, styles are re-applied and the function returns without writing a new JSONL entry.
-
-#### Scenario: Second notify call for same pane — no duplicate entry
-- **WHEN** `claude-notify notify` is called for a pane that already has an uncleared JSONL entry
-- **THEN** no new record is appended to the JSONL file
-- **AND** `window-status-style`, `window-status-current-style`, and the pane pop (`select-pane -P`) are re-applied
-
-#### Scenario: New entry created after previous cleared
-- **WHEN** a pane's previous notification has been cleared (dashboard selection)
-- **AND** `claude-notify notify` is called again for that pane
-- **THEN** a new JSONL record is created and styles are set

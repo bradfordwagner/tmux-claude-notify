@@ -151,6 +151,38 @@ func ClearPane(paneID string) error {
 	return os.Rename(tmp, path)
 }
 
+// WindowForPane returns the window ID from the most recent uncleared record for pane.
+// Used by runClear to resolve the window ID even when the pane no longer exists in tmux.
+func WindowForPane(paneID string) (string, error) {
+	records, err := ReadAll()
+	if err != nil {
+		return "", err
+	}
+	for _, r := range records { // already sorted newest-first
+		if !r.Cleared && r.Pane == paneID {
+			return r.Window, nil
+		}
+	}
+	return "", nil
+}
+
+// UnclearedForWindow returns all uncleared records whose Window field matches windowID.
+// Used by runClear to gate window-level style teardown: only clear styles when the
+// last uncleared entry for that window has been removed.
+func UnclearedForWindow(windowID string) ([]Record, error) {
+	records, err := ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	var result []Record
+	for _, r := range records {
+		if !r.Cleared && r.Window == windowID {
+			result = append(result, r)
+		}
+	}
+	return result, nil
+}
+
 // UpdateStatus updates the status field of the most recent uncleared record for
 // paneID. Atomically rewrites the JSONL file. No-op if no uncleared record exists.
 func UpdateStatus(paneID, status string) error {

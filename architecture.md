@@ -22,7 +22,7 @@
 │                   re-apply styles          store.Append              │
 │                   (idempotent return)      notifications.jsonl       │
 │                                           + SetWindowStyle           │
-│                                           + SetPopStyle              │
+│                                           + SetPopStyle(paneID)      │
 │                                           + notify-send (optional)   │
 └─────────────────────────────────────────────────────────────────────┘
 
@@ -40,12 +40,14 @@ User invokes keybinding (C-M-p by default):
   ├─ setup.Check()        → reads ~/.claude/settings.json, auto-configures if missing
   ├─ store.ReadAll()      → parse notifications.jsonl, sort by ts desc
   ├─ watcher.Reconcile()  → scan active transcripts, correct stale JSONL entries
-  ├─ tmux list-panes -a   → filter to live panes only
+  ├─ tmux list-panes -a   → build live-pane set (all uncleared entries shown; gone panes get "(gone)" path)
   └─ bubbletea TUI  (fsnotify auto-refresh on JSONL/settings; transcript watcher for live state)
       ├─ transcript watcher: watches ~/.claude/projects/**/*.jsonl via fsnotify
       │   ├─ state change → running/waiting/stale → UpdateStatus or Append
       │   └─ user message  → ClearPane + ClearWindowStyle (user responded)
-      ├─ select entry → ClearWindowStyle + ClearPopStyle + store.ClearPane
+      ├─ select entry → store.WindowForPane + store.ClearPane
+      │                  + store.UnclearedForWindow ──► ClearWindowStyle + ClearPopStyle
+      │                  │   (window styles cleared only when last notified pane in window dismissed)
       │                  + SelectWindow (session-level) + DetachIfShpell
       └─ q/esc → close transcript watcher + DetachIfShpell → tea.Quit
 ```
@@ -59,7 +61,7 @@ User invokes keybinding (C-M-p by default):
  claude-notify notify
       │
       ├─ HasUnclearedPane(paneID)?
-      │     yes ──► re-apply window-status-style + window-active-style
+      │     yes ──► re-apply window-status-style + select-pane -P (pane pop)
       │             (idempotent; no new JSONL entry)
       │
       └─── no ──► first notification for this pane
@@ -69,7 +71,7 @@ User invokes keybinding (C-M-p by default):
                   │
                   ├──► tmux window-status-style        (tab: #AD8EE6,bold)
                   ├──► tmux window-status-current-style (active tab: same)
-                  ├──► tmux window-active-style         (pane pop bg)
+                  ├──► select-pane -P bg=<color>         (pane pop bg, pane-scoped)
                   ├──► notify-send                      (desktop toast, optional)
                   │
                   └──► active-pane auto-reset (if pane is currently focused)
@@ -110,13 +112,16 @@ User invokes keybinding (C-M-p by default):
  User selects entry from dashboard:
       │
       ▼
- UI enter handler
+ UI enter handler → runClear(paneID)
+      ├──► store.WindowForPane        (window ID from JSONL; works even when pane is gone)
       ├──► store.ClearPane            (marked cleared:true in JSONL)
-      ├──► tmux window-status-style unset
-      ├──► tmux window-status-current-style unset
-      ├──► tmux window-active-style unset   (clears pane pop)
+      ├──► store.UnclearedForWindow   (check remaining notifications for this window)
+      │       └─ if none remain ──► tmux window-status-style unset
+      │                          ──► tmux window-status-current-style unset
+      │                          ──► select-pane -P ""   (clears pane pop, pane-scoped)
+      │       └─ if siblings remain → window styles preserved
       ├──► UnregisterClearHook
-      ├──► SelectWindow               (outer session jumps to that window)
+      ├──► SelectWindow               (outer session jumps to that window; no-op if pane gone)
       └──► DetachIfShpell             (closes grimoire popup)
 ```
 
@@ -160,7 +165,7 @@ tmux-claude-notify.tmux       TPM entry point (bash, thin)
 bin/claude-notify              compiled binary (gitignored)
 cmd/claude-notify/main.go      binary entry point + subcommand routing
 internal/
-  store/store.go               JSONL log: Append, ReadAll, ClearPane, HasUnclearedPane, UpdateStatus
+  store/store.go               JSONL log: Append, ReadAll, ClearPane, HasUnclearedPane, UpdateStatus, WindowForPane, UnclearedForWindow
   tmux/tmux.go                 tmux command helpers
   setup/setup.go               ~/.claude/settings.json hook check + auto-configure
   watcher/watcher.go           transcript file watcher: state derivation, pane correlation
@@ -179,13 +184,15 @@ DEVELOPMENT.md                 ordered development items
 | TUI | bubbletea + lipgloss | no fzf runtime dependency, full color control |
 | Keybinding | TPM option `@claude-notify-key` | user-overridable, standard TPM convention |
 | Hook install | auto-write if missing, read-only check otherwise | friction of manual setup outweighs risk of touching user file |
-| Pane pop | persistent `window-active-style bg=<color>` | stays until cleared — no timer, no goroutine; cosmetic only so errors ignored |
+| Pane pop | `select-pane -P bg=<color>` (pane-scoped) | targets the specific notified pane regardless of focus; `window-active-style` applied to the wrong pane when user was focused elsewhere |
 | Pop color | `@claude-notify-pop-color` → `@tmux-pop-color` → `#1e1e2e` fallback | visible on black terminal; compatible with Catppuccin Mocha |
 | Dashboard keybinding | grimoire shpell if present, `display-popup` fallback | grimoire provides native toggle (C-M-p again to close); popup requires explicit q/esc |
 | Dashboard selection | stay open until list empty, then DetachIfShpell | allows handling multiple pending notifications in one session |
 | Auto-clear hook | none (removed) | pane-focus-in broken in WSL2; after-select-window fires on any tmux command |
 | Active-pane auto-reset | detached subprocess, `@claude-notify-active-reset-seconds` (default 15; 0=off) | focused-pane notifications are noise; subprocess sleeps, checks popup state, then checks idempotency before clearing |
 | Idempotent notify | `HasUnclearedPane` before Append | Stop fires multiple times per skill invocation; only first call creates JSONL entry |
+| Multi-pane window clearing | `UnclearedForWindow` after `ClearPane` gates style teardown | clearing one pane must not remove the window highlight while sibling panes still have uncleared notifications |
+| Gone-pane visibility | show all uncleared entries; `(gone)` in PATH when pane missing | live-pane filter silently hides valid notifications (e.g. ~/dotfiles session after pane restart) |
 | Hook registered | Stop only | fallback for when dashboard is closed; transcript watcher is primary when open |
 | Transcript watcher | embedded in dashboard TUI, not daemon | no IPC complexity, lifecycle tied to TUI, TPM entry point unchanged |
 | Pane correlation | forward encode `pane_current_path` → lookup project dir | unambiguous; naive decode fails for paths with hyphens/dots |

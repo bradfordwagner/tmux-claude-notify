@@ -85,7 +85,7 @@ func runNotify() error {
 	already, _ := store.HasUnclearedPane(paneID)
 	if already {
 		_ = tmuxclient.SetWindowStyle(windowID)
-		_ = tmuxclient.SetPopStyle(windowID)
+		_ = tmuxclient.SetPopStyle(paneID)
 		return nil
 	}
 
@@ -95,7 +95,7 @@ func runNotify() error {
 	if err := tmuxclient.SetWindowStyle(windowID); err != nil {
 		return err
 	}
-	_ = tmuxclient.SetPopStyle(windowID)
+	_ = tmuxclient.SetPopStyle(paneID)
 
 	if err := tmuxclient.NotifySend(windowName); err != nil {
 		_ = err
@@ -124,13 +124,29 @@ func runNotify() error {
 }
 
 func runClear(paneID string) error {
-	windowID, err := tmuxclient.WindowIDForPane(paneID)
-	if err == nil {
-		_ = tmuxclient.ClearWindowStyle(windowID)
-		_ = tmuxclient.ClearPopStyle(windowID)
+	// Resolve window ID from JSONL first (reliable even when pane no longer exists),
+	// falling back to a live tmux query.
+	windowID, _ := store.WindowForPane(paneID)
+	if windowID == "" {
+		windowID, _ = tmuxclient.WindowIDForPane(paneID)
 	}
+
+	// Pane pop is per-pane — always clear it for this specific pane.
+	_ = tmuxclient.ClearPopStyle(paneID)
 	_ = tmuxclient.UnregisterClearHook(paneID)
-	return store.ClearPane(paneID)
+	if err := store.ClearPane(paneID); err != nil {
+		return err
+	}
+
+	// Window tab highlight is window-scoped — only clear when no sibling panes
+	// in this window still have uncleared notifications.
+	if windowID != "" {
+		remaining, _ := store.UnclearedForWindow(windowID)
+		if len(remaining) == 0 {
+			_ = tmuxclient.ClearWindowStyle(windowID)
+		}
+	}
+	return nil
 }
 
 // runAutoReset sleeps delaySecs then clears the notification if still uncleared

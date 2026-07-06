@@ -28,9 +28,9 @@ On each write to a transcript file, the watcher SHALL read the tail of the file,
 - **WHEN** the most recent event in the transcript is a `tool_use` event
 - **THEN** the derived state is `running`
 
-#### Scenario: Assistant message followed by silence → waiting
+#### Scenario: Assistant message with end_turn stop_reason → waiting
 - **WHEN** the most recent event is an `assistant` message
-- **AND** no new events have appeared for at least 2 seconds
+- **AND** the message has `stop_reason: "end_turn"`
 - **THEN** the derived state is `waiting`
 
 #### Scenario: No transcript activity for extended period → stale
