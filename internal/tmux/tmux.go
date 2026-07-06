@@ -68,19 +68,20 @@ func ClearPopStyle(windowID string) error {
 	return err
 }
 
-func RegisterClearHook(paneID, binaryPath string) error {
+// RegisterClearHook registers a global after-select-window hook that clears the
+// notification when the user switches to the notified window. pane-focus-in is
+// not used because it requires terminal focus event reporting (broken in WSL2).
+func RegisterClearHook(paneID, windowID, binaryPath string) error {
 	idx := strings.TrimPrefix(paneID, "%")
-	// pane-focus-in[N] fires for ANY pane focus — the index is not a pane filter.
-	// Use if-shell -F to guard so clear only runs when the focused pane matches.
-	hookCmd := fmt.Sprintf("if-shell -F '#{==:#{pane_id},%s}' 'run-shell \"%s clear --pane %s\"'",
-		paneID, binaryPath, paneID)
-	_, err := run("set-hook", "-a", fmt.Sprintf("pane-focus-in[%s]", idx), hookCmd)
+	hookCmd := fmt.Sprintf("if-shell -F '#{==:#{window_id},%s}' 'run-shell \"%s clear --pane %s\"'",
+		windowID, binaryPath, paneID)
+	_, err := run("set-hook", "-g", "-a", fmt.Sprintf("after-select-window[%s]", idx), hookCmd)
 	return err
 }
 
 func UnregisterClearHook(paneID string) error {
 	idx := strings.TrimPrefix(paneID, "%")
-	_, err := run("set-hook", "-u", fmt.Sprintf("pane-focus-in[%s]", idx))
+	_, err := run("set-hook", "-g", "-u", fmt.Sprintf("after-select-window[%s]", idx))
 	return err
 }
 

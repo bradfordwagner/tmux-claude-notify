@@ -54,6 +54,11 @@ func runNotify() error {
 		return nil
 	}
 
+	// Clear any previous notification for this pane before setting a new one.
+	// Hook-based auto-clear is unreliable (tmux background clients fire
+	// after-select-window too), so we clear on the next notify instead.
+	_ = runClear(paneID)
+
 	windowID, err := tmuxclient.WindowID(paneID)
 	if err != nil {
 		return err
@@ -66,13 +71,7 @@ func runNotify() error {
 	}
 	_ = tmuxclient.SetPopStyle(windowID)
 
-	binaryPath, _ := os.Executable()
-	if err := tmuxclient.RegisterClearHook(paneID, binaryPath); err != nil {
-		return err
-	}
-
 	if err := tmuxclient.NotifySend(windowName); err != nil {
-		// notify-send is optional — ignore errors
 		_ = err
 	}
 
