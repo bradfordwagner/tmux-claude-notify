@@ -143,3 +143,4 @@ Used in bradfordwagner's devtainer dotfiles:
 - TPM plugin entry point stays thin — all logic lives in the Go binary
 - No timeouts on the visual indicator; persists until user acknowledges
 - **All changes must update architecture diagrams** — any modification to data flow, component boundaries, or hook wiring must be reflected in the relevant diagram(s) before the change is considered complete
+- **New or modified `@claude-notify-*` TPM options must be documented in `README.md`** — add or update the row in the Configuration table with the option name, default value, and description
