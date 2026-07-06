@@ -34,6 +34,10 @@ func WindowName(paneID string) (string, error) {
 	return run("display-message", "-t", paneID, "-p", "#{window_name}")
 }
 
+func PanePath(paneID string) (string, error) {
+	return run("display-message", "-t", paneID, "-p", "#{pane_current_path}")
+}
+
 func Session(paneID string) (string, error) {
 	return run("display-message", "-t", paneID, "-p", "#{session_name}")
 }

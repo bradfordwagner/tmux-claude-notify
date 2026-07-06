@@ -46,6 +46,7 @@ type (
 
 type entry struct {
 	record store.Record
+	Path   string
 }
 
 type model struct {
@@ -193,15 +194,19 @@ func (m model) View() string {
 	if len(m.entries) == 0 {
 		b.WriteString(dimStyle.Render("No pending notifications.") + "\n")
 	} else {
+		header := fmt.Sprintf("  %-12s  %-20s  %-25s  %-14s  %s",
+			"STATUS", "WINDOW", "PATH", "SESSION", "AGE")
+		b.WriteString(dimStyle.Render(header) + "\n")
+		b.WriteString(dimStyle.Render("  " + strings.Repeat("─", 82)) + "\n")
 		for i, e := range m.entries {
 			r := e.record
 			statusBadge := renderStatusBadge(r.Status)
-			line := fmt.Sprintf("%-20s  %-12s  %-10s  %-9s  %s",
-				r.WindowName, r.Session, r.Pane, statusBadge, formatAge(r.TS))
+			line := fmt.Sprintf("%s  %-20s  %-25s  %-14s  %s",
+				statusBadge, r.WindowName, e.Path, r.Session, formatAge(r.TS))
 			if i == m.cursor {
-				b.WriteString(selectedStyle.Render("> "+line) + "\n")
+				b.WriteString(selectedStyle.Render("> ") + line + "\n")
 			} else {
-				b.WriteString(normalStyle.Render("  "+line) + "\n")
+				b.WriteString("  " + normalStyle.Render(line) + "\n")
 			}
 		}
 		b.WriteString("\n" + dimStyle.Render("↑/↓ or j/k to move  •  enter to switch  •  q to quit") + "\n")
@@ -210,15 +215,24 @@ func (m model) View() string {
 	return b.String()
 }
 
+var statusIcons = map[string]string{
+	"waiting": "⏳",
+	"running": "⚙ ",
+	"stale":   "💤",
+}
+
 func renderStatusBadge(status string) string {
+	if status == "" {
+		status = "waiting"
+	}
 	style, ok := statusStyles[status]
 	if !ok {
 		style = dimStyle
 	}
-	if status == "" {
-		status = "waiting"
-	}
-	return style.Render(status)
+	icon := statusIcons[status]
+	// Pad plain text before applying color so ANSI codes don't skew column widths.
+	padded := fmt.Sprintf("%-10s", icon+" "+status)
+	return style.Render(padded)
 }
 
 func (m model) renderSetupStatus() string {
@@ -321,15 +335,31 @@ func loadEntries() []entry {
 	// Duplicates can arise from a race between the Stop hook subprocess and the
 	// watcher goroutine both appending before either's HasUnclearedPane check
 	// sees the other's write.
+	home, _ := os.UserHomeDir()
 	seen := make(map[string]bool)
 	var entries []entry
 	for _, r := range records { // records already sorted newest-first
 		if !r.Cleared && liveSet[r.Pane] && !seen[r.Pane] {
 			seen[r.Pane] = true
-			entries = append(entries, entry{record: r})
+			p, _ := tmuxclient.PanePath(r.Pane)
+			entries = append(entries, entry{record: r, Path: trimPath(p, home)})
 		}
 	}
 	return entries
+}
+
+func trimPath(p, home string) string {
+	if p == "" {
+		return ""
+	}
+	if home != "" && strings.HasPrefix(p, home) {
+		p = "~" + p[len(home):]
+	}
+	parts := strings.Split(strings.TrimRight(p, "/"), "/")
+	if len(parts) <= 2 {
+		return p
+	}
+	return strings.Join(parts[len(parts)-2:], "/")
 }
 
 func formatAge(tsNano int64) string {
