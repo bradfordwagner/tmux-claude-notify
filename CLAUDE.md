@@ -13,10 +13,11 @@ tmux-claude-notify.tmux        # TPM entry point: compiles binary, registers key
 bin/claude-notify              # compiled Go binary (gitignored)
 cmd/claude-notify/main.go      # binary entry point + subcommand routing
 internal/
-  store/store.go               # JSONL notification log (Append, ReadAll, ClearPane, HasUnclearedPane)
+  store/store.go               # JSONL notification log (Append, ReadAll, ClearPane, HasUnclearedPane, UpdateStatus)
   tmux/tmux.go                 # tmux command helpers
   setup/setup.go               # ~/.claude/settings.json hook check + auto-configure
-  ui/model.go                  # bubbletea dashboard TUI
+  watcher/watcher.go           # transcript file watcher: state derivation, pane correlation
+  ui/model.go                  # bubbletea dashboard TUI (embeds transcript watcher)
 Taskfile.yml                   # build / dev / test / lint / setup tasks
 architecture.md                # canonical architecture diagram (update with every change)
 DEVELOPMENT.md                 # ordered development items and status
@@ -27,6 +28,10 @@ The binary owns the full hook path — there are no bash scripts in the notifica
 
 ## How it works
 
+Notifications flow from two sources: the Stop hook (always active) and the transcript watcher (active while the dashboard is open).
+
+### Stop hook (fallback)
+
 When `claude` finishes a response and returns to the prompt, the Claude Code `Stop` hook fires.
 `bin/claude-notify notify` (invoked by the Stop hook):
 1. Reads `$TMUX_PANE` (inherited env from the shell that launched `claude`) to identify the window
@@ -34,7 +39,27 @@ When `claude` finishes a response and returns to the prompt, the Claude Code `St
 3. Sets `window-status-style` and `window-status-current-style` to `fg=#AD8EE6,bold` on the window
 4. Sets `window-active-style bg=<color>` (pane background pop)
 5. Fires `notify-send` for a desktop notification (if available)
-6. Appends a record to `~/.local/share/tmux-claude-notify/notifications.jsonl`
+6. Appends a record to `~/.local/share/tmux-claude-notify/notifications.jsonl` with `status:"waiting"`
+
+### Transcript watcher (while dashboard is open)
+
+When the dashboard TUI starts, it launches a transcript watcher that reads Claude Code's own JSONL session files at `~/.claude/projects/<encoded-path>/<session-id>.jsonl`. The watcher:
+- Discovers panes running `claude*` via `tmux list-panes`
+- Encodes each pane's `pane_current_path` (replace `/` and `.` with `-`) to locate the project dir
+- Watches the latest transcript JSONL via fsnotify
+- Derives agent state from the last 20 transcript events:
+  - `assistant` + `tool_use` content → `running`
+  - `assistant` + `stop_reason:"end_turn"` → `waiting`
+  - `user` + `tool_result` content → `running` (tool output returning to Claude)
+  - `user` + text content → user responded → **clear notification**
+  - No activity for `@claude-notify-stale-minutes` (default 5) → `stale`
+- On `waiting`: highlights window tab; creates or updates JSONL entry
+- On `running`/`stale`: updates JSONL status only (no window highlight)
+- On user response: clears JSONL entry and window styles
+
+### Reconciliation on dashboard open
+
+On startup, `watcher.Reconcile()` scans all active transcripts and corrects any JSONL entries that changed while the dashboard was closed (e.g., clears entries where the user already responded via the Stop-hook period).
 
 Notifications are cleared explicitly by selecting them in the dashboard — there is no auto-clear hook (pane-focus-in is broken in WSL2; after-select-window fires on any tmux command).
 

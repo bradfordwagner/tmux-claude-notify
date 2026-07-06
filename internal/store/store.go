@@ -16,6 +16,7 @@ type Record struct {
 	WindowName string `json:"window_name"`
 	Session    string `json:"session"`
 	Cleared    bool   `json:"cleared"`
+	Status     string `json:"status"` // "running", "waiting", "stale"; defaults to "waiting" if absent
 }
 
 func NowNano() int64 {
@@ -61,6 +62,9 @@ func ReadAll() ([]Record, error) {
 		var r Record
 		if err := json.Unmarshal(line, &r); err != nil {
 			continue
+		}
+		if r.Status == "" {
+			r.Status = "waiting"
 		}
 		records = append(records, r)
 	}
@@ -117,7 +121,66 @@ func ClearPane(paneID string) error {
 		return err
 	}
 
-	// Find most recent uncleared record for this pane (highest TS)
+	// Clear all uncleared records for this pane. Multiple uncleared records can
+	// accumulate from a race between the Stop hook subprocess and the watcher.
+	found := false
+	for i, r := range records {
+		if r.Pane == paneID && !r.Cleared {
+			records[i].Cleared = true
+			found = true
+		}
+	}
+	if !found {
+		return nil
+	}
+
+	tmp := path + ".tmp"
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(out)
+	for _, r := range records {
+		if err := enc.Encode(r); err != nil {
+			out.Close()
+			os.Remove(tmp)
+			return err
+		}
+	}
+	out.Close()
+	return os.Rename(tmp, path)
+}
+
+// UpdateStatus updates the status field of the most recent uncleared record for
+// paneID. Atomically rewrites the JSONL file. No-op if no uncleared record exists.
+func UpdateStatus(paneID, status string) error {
+	path := LogPath()
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	var records []Record
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var r Record
+		if err := json.Unmarshal(line, &r); err != nil {
+			continue
+		}
+		records = append(records, r)
+	}
+	f.Close()
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
 	bestIdx := -1
 	for i, r := range records {
 		if r.Pane == paneID && !r.Cleared {
@@ -129,7 +192,7 @@ func ClearPane(paneID string) error {
 	if bestIdx == -1 {
 		return nil
 	}
-	records[bestIdx].Cleared = true
+	records[bestIdx].Status = status
 
 	tmp := path + ".tmp"
 	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)

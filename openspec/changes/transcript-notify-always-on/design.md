@@ -91,6 +91,6 @@ Pane correlation: `tmux list-panes -a -F "#{pane_id} #{pane_current_path} #{pane
 
 Path decoding: replace all leading/separator `-` with `/`, call `os.Stat` to validate; if stat fails, path is ambiguous (skip).
 
-## Open Questions
+## Resolved Questions
 
-- Should `stale` threshold (5 min) be a TPM option (`@claude-notify-stale-minutes`)?
+- **Stale threshold**: exposed as TPM option `@claude-notify-stale-minutes` (default `5`). Read at watcher start via `tmux show-option -gqv @claude-notify-stale-minutes`; fall back to 5 if unset or non-numeric.

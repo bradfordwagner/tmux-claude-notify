@@ -14,6 +14,7 @@ import (
 	"github.com/bradfordwagner/tmux-claude-notify/internal/setup"
 	"github.com/bradfordwagner/tmux-claude-notify/internal/store"
 	tmuxclient "github.com/bradfordwagner/tmux-claude-notify/internal/tmux"
+	"github.com/bradfordwagner/tmux-claude-notify/internal/watcher"
 )
 
 var (
@@ -29,10 +30,16 @@ var (
 	statusOK      = lipgloss.NewStyle().Foreground(okColor)
 	statusWarn    = lipgloss.NewStyle().Foreground(warnColor)
 	statusUnknown = lipgloss.NewStyle().Foreground(unknColor)
+
+	statusStyles = map[string]lipgloss.Style{
+		"waiting": lipgloss.NewStyle().Foreground(accent),
+		"running": lipgloss.NewStyle().Foreground(warnColor),
+		"stale":   lipgloss.NewStyle().Foreground(subtle),
+	}
 )
 
 type (
-	settingsChangedMsg     struct{}
+	settingsChangedMsg      struct{}
 	notificationsChangedMsg struct{}
 )
 
@@ -41,58 +48,78 @@ type entry struct {
 }
 
 type model struct {
-	entries      []entry
-	cursor       int
-	setupResult  setup.Result
-	setupMessage string
-	watcher      *fsnotify.Watcher
-	quitting     bool
+	entries          []entry
+	cursor           int
+	setupResult      setup.Result
+	setupMessage     string
+	watcher          *fsnotify.Watcher
+	transcriptWatcher *watcher.Watcher
+	quitting         bool
 }
 
 func newModel() (model, error) {
-	watcher, err := fsnotify.NewWatcher()
+	fw, err := fsnotify.NewWatcher()
 	if err != nil {
 		return model{}, err
 	}
 
-	// Watch directory containing settings.json (handles create/write/delete).
 	settingsDir := filepath.Dir(setup.SettingsPath())
-	_ = watcher.Add(settingsDir)
+	_ = fw.Add(settingsDir)
 
-	// Ensure log directory exists so fsnotify can watch it from first open.
 	logDir := filepath.Dir(store.LogPath())
 	_ = os.MkdirAll(logDir, 0o755)
-	_ = watcher.Add(logDir)
+	_ = fw.Add(logDir)
 
-	m := model{watcher: watcher}
+	tw, err := watcher.New()
+	if err != nil {
+		fw.Close()
+		return model{}, err
+	}
+
+	m := model{watcher: fw, transcriptWatcher: tw}
 	m.setupResult, m.setupMessage = checkAndConfigure()
 	m.entries = loadEntries()
+
+	// Reconcile store against live transcript state before first render.
+	for _, sc := range tw.Reconcile() {
+		applyStateChange(sc)
+	}
+	m.entries = loadEntries()
+
+	tw.Start()
 	return m, nil
 }
 
 func (m model) Init() tea.Cmd {
-	return watchCmd(m.watcher)
+	return tea.Batch(watchCmd(m.watcher), watcherCmd(m.transcriptWatcher))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg.(type) {
+	switch msg := msg.(type) {
 	case settingsChangedMsg:
 		m.setupResult, m.setupMessage = checkAndConfigure()
-		// Re-arm — wait for the next event.
 		return m, watchCmd(m.watcher)
 
 	case notificationsChangedMsg:
 		m.entries = loadEntries()
-		// Keep cursor in bounds after reload.
 		if m.cursor >= len(m.entries) {
 			m.cursor = max(0, len(m.entries)-1)
 		}
 		return m, watchCmd(m.watcher)
 
+	case watcher.StateChange:
+		applyStateChange(msg)
+		m.entries = loadEntries()
+		if m.cursor >= len(m.entries) {
+			m.cursor = max(0, len(m.entries)-1)
+		}
+		return m, watcherCmd(m.transcriptWatcher)
+
 	case tea.KeyMsg:
-		switch msg.(tea.KeyMsg).String() {
+		switch msg.String() {
 		case "q", "esc", "ctrl+c":
 			m.watcher.Close()
+			m.transcriptWatcher.Close()
 			m.quitting = true
 			return m, tea.Quit
 		case "up", "k":
@@ -115,9 +142,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.cursor >= len(m.entries) {
 					m.cursor = max(0, len(m.entries)-1)
 				}
-				// Close the grimoire popup but keep the binary running so
-				// C-M-p can re-attach to the same instance with the updated list.
-				// In popup fallback (not shpell) this is a no-op.
 				_ = tmuxclient.DetachIfShpell()
 			}
 		}
@@ -139,8 +163,9 @@ func (m model) View() string {
 	} else {
 		for i, e := range m.entries {
 			r := e.record
-			line := fmt.Sprintf("%-20s  %-12s  %-10s  %s",
-				r.WindowName, r.Session, r.Pane, formatAge(r.TS))
+			statusBadge := renderStatusBadge(r.Status)
+			line := fmt.Sprintf("%-20s  %-12s  %-10s  %-9s  %s",
+				r.WindowName, r.Session, r.Pane, statusBadge, formatAge(r.TS))
 			if i == m.cursor {
 				b.WriteString(selectedStyle.Render("> "+line) + "\n")
 			} else {
@@ -151,6 +176,17 @@ func (m model) View() string {
 	}
 
 	return b.String()
+}
+
+func renderStatusBadge(status string) string {
+	style, ok := statusStyles[status]
+	if !ok {
+		style = dimStyle
+	}
+	if status == "" {
+		status = "waiting"
+	}
+	return style.Render(status)
 }
 
 func (m model) renderSetupStatus() string {
@@ -168,15 +204,14 @@ func (m model) renderSetupStatus() string {
 	}
 }
 
-// watchCmd blocks on the watcher channel and dispatches the appropriate message
-// type based on which file changed.
-func watchCmd(watcher *fsnotify.Watcher) tea.Cmd {
+// watchCmd blocks on the fsnotify watcher and dispatches message type by file.
+func watchCmd(fw *fsnotify.Watcher) tea.Cmd {
 	settingsFile := filepath.Base(setup.SettingsPath())
 	logFile := filepath.Base(store.LogPath())
 	return func() tea.Msg {
 		for {
 			select {
-			case event, ok := <-watcher.Events:
+			case event, ok := <-fw.Events:
 				if !ok {
 					return nil
 				}
@@ -186,12 +221,52 @@ func watchCmd(watcher *fsnotify.Watcher) tea.Cmd {
 				case logFile:
 					return notificationsChangedMsg{}
 				}
-			case _, ok := <-watcher.Errors:
+			case _, ok := <-fw.Errors:
 				if !ok {
 					return nil
 				}
 			}
 		}
+	}
+}
+
+// watcherCmd waits for the next transcript StateChange and returns it as a tea.Msg.
+func watcherCmd(tw *watcher.Watcher) tea.Cmd {
+	return func() tea.Msg {
+		sc, ok := <-tw.Changes()
+		if !ok {
+			return nil
+		}
+		return sc
+	}
+}
+
+// applyStateChange updates the JSONL store and tmux styles for a watcher event.
+func applyStateChange(sc watcher.StateChange) {
+	if sc.Clear {
+		_ = store.ClearPane(sc.PaneID)
+		_ = tmuxclient.ClearWindowStyle(sc.WindowID)
+		_ = tmuxclient.ClearPopStyle(sc.WindowID)
+		return
+	}
+	has, _ := store.HasUnclearedPane(sc.PaneID)
+	if sc.Status == watcher.StatusWaiting {
+		if has {
+			_ = store.UpdateStatus(sc.PaneID, string(sc.Status))
+		} else {
+			windowName, _ := tmuxclient.WindowName(sc.PaneID)
+			_ = store.Append(store.Record{
+				TS:         store.NowNano(),
+				Pane:       sc.PaneID,
+				Window:     sc.WindowID,
+				WindowName: windowName,
+				Session:    sc.Session,
+				Status:     string(sc.Status),
+			})
+		}
+		_ = tmuxclient.SetWindowStyle(sc.WindowID)
+	} else {
+		_ = store.UpdateStatus(sc.PaneID, string(sc.Status))
 	}
 }
 
@@ -214,9 +289,15 @@ func loadEntries() []entry {
 	for _, p := range livePanes {
 		liveSet[p] = true
 	}
+	// Deduplicate: show only the most recent uncleared record per pane.
+	// Duplicates can arise from a race between the Stop hook subprocess and the
+	// watcher goroutine both appending before either's HasUnclearedPane check
+	// sees the other's write.
+	seen := make(map[string]bool)
 	var entries []entry
-	for _, r := range records {
-		if !r.Cleared && liveSet[r.Pane] {
+	for _, r := range records { // records already sorted newest-first
+		if !r.Cleared && liveSet[r.Pane] && !seen[r.Pane] {
+			seen[r.Pane] = true
 			entries = append(entries, entry{record: r})
 		}
 	}
