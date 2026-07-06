@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Visual indicator on the tmux window tab and pane background when claude is waiting for input. Persists until explicitly cleared via the dashboard. No timers, no auto-clear hooks.
+Visual indicator on the tmux window tab and pane background when claude is waiting for input. Persists until explicitly cleared via the dashboard, or — for a notification on the currently focused pane — until the auto-reset timer fires. Non-focused panes have no auto-clear; they require explicit dashboard dismissal.
 
 ## Requirements
 
@@ -17,13 +17,21 @@ When `claude-notify notify` is invoked, the tmux window containing the notified 
 - **WHEN** the notified window is the currently selected window
 - **THEN** `window-status-current-style fg=#AD8EE6,bold` is set, making the active tab visually distinct
 
-#### Scenario: Highlight persists until explicitly cleared
+The notification SHALL persist until either (a) the user selects the entry from the dashboard, or (b) the auto-reset timer fires for a focused-pane notification. The highlight MUST NOT auto-clear for non-focused panes.
+
+#### Scenario: Highlight persists until explicitly cleared (non-focused pane)
 - **WHEN** the highlight has been set
+- **AND** the notified pane was not focused at notify time (or auto-reset is disabled)
 - **AND** the user has not yet selected the notification from the dashboard
 - **THEN** both window-status styles remain set across window switches
 
 #### Scenario: Highlight cleared on dashboard selection
 - **WHEN** the user selects the entry from the dashboard
+- **THEN** both `window-status-style` and `window-status-current-style` are unset via `set-option -u`
+
+#### Scenario: Highlight cleared by auto-reset timer
+- **WHEN** the auto-reset subprocess fires after the configured delay
+- **AND** the JSONL entry is still uncleared
 - **THEN** both `window-status-style` and `window-status-current-style` are unset via `set-option -u`
 
 #### Scenario: Idempotent on repeated notify calls

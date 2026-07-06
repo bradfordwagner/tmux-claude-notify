@@ -129,6 +129,35 @@ func DetachIfShpell() error {
 	return nil
 }
 
+// IsPaneFocused returns true only when the given pane is the active pane in the
+// currently active window — i.e. the user is looking at it right now.
+func IsPaneFocused(paneID string) bool {
+	out, err := run("display-message", "-t", paneID, "-p", "#{pane_active}#{window_active}")
+	return err == nil && out == "11"
+}
+
+// ActiveResetSeconds reads @claude-notify-active-reset-seconds from global tmux
+// options. Returns 15 if unset, 0 if explicitly "0" (disables auto-reset).
+func ActiveResetSeconds() int {
+	val, _ := run("show-option", "-gqv", "@claude-notify-active-reset-seconds")
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return 15
+	}
+	if val == "0" {
+		return 0
+	}
+	// strconv.Atoi failures fall back to default
+	n := 0
+	for _, c := range val {
+		if c < '0' || c > '9' {
+			return 15
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
+
 func NotifySend(windowName string) error {
 	if _, err := exec.LookPath("notify-send"); err != nil {
 		return nil

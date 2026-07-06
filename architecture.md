@@ -70,7 +70,16 @@ User invokes keybinding (C-M-p by default):
                   ├──► tmux window-status-style        (tab: #AD8EE6,bold)
                   ├──► tmux window-status-current-style (active tab: same)
                   ├──► tmux window-active-style         (pane pop bg)
-                  └──► notify-send                      (desktop toast, optional)
+                  ├──► notify-send                      (desktop toast, optional)
+                  │
+                  └──► active-pane auto-reset (if pane is currently focused)
+                       │  reads @claude-notify-active-reset-seconds (default 15; 0=off)
+                       │  IsPaneFocused: pane_active=1 AND window_active=1
+                       │
+                       └─► forkAutoReset → detached subprocess (Setsid, closed stdio)
+                                │  sleeps N seconds
+                                ├─ HasUnclearedPane? yes → runClear (same as manual dismiss)
+                                └─ HasUnclearedPane? no  → exit (already dismissed)
 
  Transcript watcher fires (while dashboard is open)
       │
@@ -174,6 +183,7 @@ DEVELOPMENT.md                 ordered development items
 | Dashboard keybinding | grimoire shpell if present, `display-popup` fallback | grimoire provides native toggle (C-M-p again to close); popup requires explicit q/esc |
 | Dashboard selection | stay open until list empty, then DetachIfShpell | allows handling multiple pending notifications in one session |
 | Auto-clear hook | none (removed) | pane-focus-in broken in WSL2; after-select-window fires on any tmux command |
+| Active-pane auto-reset | detached subprocess, `@claude-notify-active-reset-seconds` (default 15; 0=off) | focused-pane notifications are noise; subprocess sleeps then checks idempotency before clearing |
 | Idempotent notify | `HasUnclearedPane` before Append | Stop fires multiple times per skill invocation; only first call creates JSONL entry |
 | Hook registered | Stop only | fallback for when dashboard is closed; transcript watcher is primary when open |
 | Transcript watcher | embedded in dashboard TUI, not daemon | no IPC complexity, lifecycle tied to TUI, TPM entry point unchanged |
