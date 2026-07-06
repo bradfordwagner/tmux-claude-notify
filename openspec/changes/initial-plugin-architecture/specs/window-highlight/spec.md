@@ -1,20 +1,28 @@
 ## ADDED Requirements
 
 ### Requirement: Window tab is highlighted when claude is waiting
-When `claude-notify notify` is invoked, the tmux window containing the notified pane SHALL have its `window-status-style` set to `fg=#AD8EE6,bold` so it is visually distinct in the status bar.
+When `claude-notify notify` is invoked, the tmux window containing the notified pane SHALL have both `window-status-style` and `window-status-current-style` set to `fg=#AD8EE6,bold` so the tab is visually distinct whether or not the user is currently on that window.
 
 #### Scenario: Highlight applied on notify subcommand
 - **WHEN** `claude-notify notify` is invoked with a valid `$TMUX_PANE`
-- **THEN** the window containing that pane has `window-status-style` set to `fg=#AD8EE6,bold`
+- **THEN** the window has both `window-status-style` and `window-status-current-style` set to `fg=#AD8EE6,bold`
 
-#### Scenario: Highlight persists until user focuses the pane
+#### Scenario: Highlight applies to the active (current) window tab
+- **WHEN** the notified window is the currently selected window
+- **THEN** `window-status-current-style fg=#AD8EE6,bold` is set, making the active tab visually distinct
+
+#### Scenario: Highlight persists until explicitly cleared
 - **WHEN** the highlight has been set
-- **AND** the user has not yet focused the notified pane
-- **THEN** the window tab remains highlighted across other window switches
+- **AND** the user has not yet selected the notification from the dashboard
+- **THEN** both window-status styles remain set across window switches
 
-#### Scenario: Highlight cleared on pane focus
-- **WHEN** the user focuses the notified pane
-- **THEN** `claude-notify clear --pane <id>` runs and unsets `window-status-style` via `set-option -u`
+#### Scenario: Highlight cleared on dashboard selection
+- **WHEN** the user selects the entry from the dashboard
+- **THEN** both `window-status-style` and `window-status-current-style` are unset via `set-option -u`
+
+#### Scenario: Idempotent on repeated notify calls
+- **WHEN** `claude-notify notify` is called again for the same pane while an uncleared entry exists
+- **THEN** the styles are re-applied but no new JSONL entry is created
 
 #### Scenario: No tmux context — silent skip
 - **WHEN** `$TMUX` is not set in the environment
@@ -24,43 +32,43 @@ When `claude-notify notify` is invoked, the tmux window containing the notified 
 - **WHEN** `$TMUX_PANE` is not set in the environment
 - **THEN** `claude-notify notify` exits 0 without attempting any tmux commands
 
-### Requirement: One-shot clear hook is registered per pane
-After setting the highlight, `claude-notify notify` SHALL register a `pane-focus-in` hook scoped to the notified pane using its numeric ID as the array index. The hook SHALL call `claude-notify clear --pane <id>` and deregister itself after firing.
-
-#### Scenario: Clear hook registered with pane-scoped index
-- **WHEN** `claude-notify notify` sets the window highlight
-- **THEN** a `pane-focus-in` hook is registered at index equal to the pane's numeric ID
-
-#### Scenario: Clear hook fires exactly once
-- **WHEN** the user focuses the notified pane
-- **THEN** `claude-notify clear` runs, clears the highlight, and unregisters the hook
-- **AND** subsequent focus events on that pane do not trigger the hook
-
-#### Scenario: Window closed before clear
-- **WHEN** the notified window is closed before the user focuses it
-- **THEN** `claude-notify clear` handles the missing window gracefully and exits 0
-
 ### Requirement: Pane background pops when waiting
-When `claude-notify notify` is invoked, the active pane in the notified window SHALL have its `window-active-style` set to `bg=<@tmux-pop-color>` so the pane background is visually distinct. The pop persists until cleared — there is no timer.
+When `claude-notify notify` is invoked, the `window-active-style` SHALL be set to `bg=<color>` on the notified window. Color resolution order: `@claude-notify-pop-color` → `@tmux-pop-color` → `#1e1e2e` (Catppuccin Mocha base). The pop persists until cleared.
 
-#### Scenario: Pop style applied on notify
-- **WHEN** `claude-notify notify` is invoked with a valid `$TMUX_PANE`
-- **THEN** `window-active-style bg=<@tmux-pop-color>` is set on that window
-- **AND** if `@tmux-pop-color` is unset, the value defaults to `black`
+#### Scenario: Pop color resolved from @claude-notify-pop-color
+- **WHEN** `@claude-notify-pop-color` is set in tmux global options
+- **THEN** that color is used for the pane background
+
+#### Scenario: Pop color falls back to @tmux-pop-color
+- **WHEN** `@claude-notify-pop-color` is unset and `@tmux-pop-color` is set
+- **THEN** `@tmux-pop-color` is used for the pane background
+
+#### Scenario: Pop color defaults to #1e1e2e when both options unset or black
+- **WHEN** neither pop color option is set, or the resolved value is `black` or `colour0`
+- **THEN** the color defaults to `#1e1e2e` (Catppuccin Mocha base, visible on black terminal)
 
 #### Scenario: Pop style persists until cleared
 - **WHEN** the pop style has been set
-- **AND** the user has not yet focused or selected the notified pane
-- **THEN** `window-active-style` remains set across other window switches
-
-#### Scenario: Pop style cleared on pane focus
-- **WHEN** the user focuses the notified pane (pane-focus-in hook fires)
-- **THEN** `claude-notify clear` unsets `window-active-style` via `set-option -u`
+- **AND** the user has not yet selected the notification from the dashboard
+- **THEN** `window-active-style` remains set
 
 #### Scenario: Pop style cleared on dashboard selection
 - **WHEN** the user selects the notification from the dashboard
-- **THEN** `claude-notify clear` unsets `window-active-style` via `set-option -u`
+- **THEN** `window-active-style` is unset via `set-option -u`
 
 #### Scenario: Pop style error is non-fatal
 - **WHEN** `set-option window-active-style` fails for any reason
 - **THEN** `claude-notify notify` continues and returns success (cosmetic only)
+
+### Requirement: Notify is idempotent across multiple hook firings
+`Stop` and `PreToolUse` both fire multiple times per claude turn. The notify subcommand SHALL check for an existing uncleared entry via `store.HasUnclearedPane` before appending a new record. If an uncleared entry already exists, styles are re-applied and the function returns without writing a new JSONL entry.
+
+#### Scenario: Second notify call for same pane — no duplicate entry
+- **WHEN** `claude-notify notify` is called for a pane that already has an uncleared JSONL entry
+- **THEN** no new record is appended to the JSONL file
+- **AND** `window-status-style`, `window-status-current-style`, and `window-active-style` are re-applied
+
+#### Scenario: New entry created after previous cleared
+- **WHEN** a pane's previous notification has been cleared (dashboard selection)
+- **AND** `claude-notify notify` is called again for that pane
+- **THEN** a new JSONL record is created and styles are set

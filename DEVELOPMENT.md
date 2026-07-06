@@ -21,11 +21,11 @@ Implementation order follows dependency constraints: scaffolding and storage fir
 
 - [x] 3.1 Guard: exit 0 silently if `$TMUX` or `$TMUX_PANE` unset
 - [x] 3.2 Resolve window ID from `$TMUX_PANE`
-- [x] 3.3 Set `window-status-style fg=#AD8EE6,bold` on the target window
-- [x] 3.4 Register `pane-focus-in` hook calling `claude-notify clear --pane <id>`
+- [x] 3.3 Set `window-status-style` and `window-status-current-style` `fg=#AD8EE6,bold` on the target window
+- [x] 3.4 ~~Register `pane-focus-in` hook~~ — removed; unreliable in WSL2 and after-select-window fires on any tmux command
 - [x] 3.5 Call `notify-send` if available; include window name in body
-- [x] 3.6 Append record to notification log
-- [x] 3.7 Set `window-active-style bg=<@tmux-pop-color>` on the target window (persistent pane pop; default black)
+- [x] 3.6 Append record to notification log (idempotent: skip if uncleared entry already exists for pane)
+- [x] 3.7 Set `window-active-style bg=<color>` on the target window (pop color; reads `@claude-notify-pop-color` → `@tmux-pop-color` → `#1e1e2e`)
 
 ## 4. clear subcommand
 
@@ -37,9 +37,10 @@ Implementation order follows dependency constraints: scaffolding and storage fir
 
 ## 5. Hook setup check
 
-- [x] 5.1 Read `~/.claude/settings.json`, locate `hooks.Stop` array
-- [x] 5.2 Detect whether Stop hook points at `claude-notify notify`
+- [x] 5.1 Read `~/.claude/settings.json`, locate `hooks.Stop` and `hooks.PreToolUse` arrays
+- [x] 5.2 Detect whether both hooks point at `claude-notify notify`; auto-configure if either is missing
 - [x] 5.3 Handle missing file and malformed JSON as distinct states
+- [x] 5.4 Dashboard status indicator shows `[Stop,PreToolUse] hooks configured`
 
 ## 6. Dashboard TUI
 

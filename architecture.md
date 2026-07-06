@@ -6,35 +6,24 @@
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Shell session (the pane running `claude`)                           │
 │                                                                      │
-│  claude process ──Stop──► ~/.claude/settings.json hook              │
-│                            └─► bin/claude-notify notify             │
-│                                  │                                   │
-│                                  │  $TMUX_PANE (inherited env)      │
-│                                  ▼                                   │
-│                         tmux display-message                         │
-│                         → window_id (@N), window_name, session      │
-│                                  │                                   │
-│                    ┌─────────────┼──────────────┐                   │
-│                    ▼             ▼               ▼                   │
-│           tmux set-option   notify-send    store.Append             │
-│           window-status-style  (optional)  notifications.jsonl      │
-│           fg=#AD8EE6,bold                                            │
-│           window-active-style                                        │
-│           bg=<@tmux-pop-color>                                       │
-│                    │                                                 │
-│                    ▼                                                 │
-│           tmux set-hook                                              │
-│           pane-focus-in[N]                                           │
-│           → bin/claude-notify clear --pane %N                       │
-│                    │                                                 │
-│  ◄─── user focuses the pane ────────────────────────────────────►   │
-│                    │                                                 │
-│                    ▼                                                 │
-│           bin/claude-notify clear --pane %N                         │
-│           ├─ tmux set-option -u window-status-style                 │
-│           ├─ tmux set-option -u window-active-style                 │
-│           ├─ tmux set-hook -u pane-focus-in[N]                      │
-│           └─ store.ClearPane (mark cleared in JSONL)                │
+│  claude process ──Stop──────────► ~/.claude/settings.json hooks     │
+│               └──PreToolUse──►    └─► bin/claude-notify notify      │
+│                                         │                            │
+│                                         │  $TMUX_PANE (inherited)   │
+│                                         ▼                            │
+│                                tmux display-message                  │
+│                                → window_id (@N), window_name, sess  │
+│                                         │                            │
+│                              ┌──────────┴──────────┐                │
+│                              ▼                      ▼                │
+│                   HasUnclearedPane?           (first call only)      │
+│                        yes │                       │ no              │
+│                            ▼                       ▼                 │
+│                   re-apply styles          store.Append              │
+│                   (idempotent return)      notifications.jsonl       │
+│                                           + SetWindowStyle           │
+│                                           + SetPopStyle              │
+│                                           + notify-send (optional)   │
 └─────────────────────────────────────────────────────────────────────┘
 
 TPM load time (tmux startup):
@@ -51,42 +40,59 @@ User invokes keybinding (C-M-p by default):
   ├─ setup.Check()  → reads ~/.claude/settings.json, auto-configures if missing
   ├─ store.ReadAll() → parse notifications.jsonl, sort by ts desc
   ├─ tmux list-panes -a → filter to live panes only
-  └─ bubbletea TUI
-      ├─ select entry → SelectWindow (session-level) + store.ClearPane
-      │   ├─ if more entries remain: stay open
-      │   └─ if list now empty: DetachIfShpell → tea.Quit
+  └─ bubbletea TUI  (fsnotify auto-refresh on JSONL or settings change)
+      ├─ select entry → ClearWindowStyle + ClearPopStyle + store.ClearPane
+      │                  + SelectWindow (session-level) + DetachIfShpell
       └─ q/esc → DetachIfShpell / close popup → tea.Quit
 ```
 
 ## Data Flow: Notification Lifecycle
 
 ```
- Stop hook fires
+ Stop or PreToolUse hook fires
       │
       ▼
  claude-notify notify
       │
-      ├──► JSONL record appended   ~/.local/share/tmux-claude-notify/notifications.jsonl
-      │    {ts, pane, window, window_name, session, cleared:false}
+      ├─ HasUnclearedPane(paneID)?
+      │     yes ──► re-apply window-status-style + window-active-style
+      │             (idempotent; no new JSONL entry)
       │
-      ├──► tmux window-status-style set  (tab highlight: #AD8EE6,bold)
-      │
-      ├──► tmux window-active-style set  (pane pop: bg=@tmux-pop-color)
-      │
-      ├──► notify-send fired            (desktop toast, if available)
-      │
-      └──► pane-focus-in hook registered
+      └─── no ──► first notification for this pane
+                  │
+                  ├──► store.Append               notifications.jsonl
+                  │    {ts, pane, window, window_name, session, cleared:false}
+                  │
+                  ├──► tmux window-status-style        (tab: #AD8EE6,bold)
+                  ├──► tmux window-status-current-style (active tab: same)
+                  ├──► tmux window-active-style         (pane pop bg)
+                  └──► notify-send                      (desktop toast, optional)
 
- User focuses pane OR selects from dashboard (last entry):
+ User selects entry from dashboard:
       │
       ▼
- claude-notify clear --pane <id>
-      │
+ UI enter handler
+      ├──► store.ClearPane            (marked cleared:true in JSONL)
       ├──► tmux window-status-style unset
-      ├──► tmux window-active-style unset
-      ├──► pane-focus-in hook deregistered
-      └──► JSONL record updated: cleared:true
+      ├──► tmux window-status-current-style unset
+      ├──► tmux window-active-style unset   (clears pane pop)
+      ├──► UnregisterClearHook
+      ├──► SelectWindow               (outer session jumps to that window)
+      └──► DetachIfShpell             (closes grimoire popup)
 ```
+
+## Hook Configuration
+
+Two hooks in `~/.claude/settings.json` call `claude-notify notify`:
+
+| Hook | When it fires |
+|---|---|
+| `Stop` | Claude finishes its response turn and returns to the user prompt |
+| `PreToolUse` | Before any tool call executes (fires mid-turn as Claude works) |
+
+`PreToolUse` ensures notifications appear as soon as Claude begins a tool-heavy
+turn, not only after the full response completes. Both hooks call the same
+`notify` subcommand; idempotency prevents duplicate JSONL entries.
 
 ## File Layout
 
@@ -95,9 +101,9 @@ tmux-claude-notify.tmux       TPM entry point (bash, thin)
 bin/claude-notify              compiled binary (gitignored)
 cmd/claude-notify/main.go      binary entry point + subcommand routing
 internal/
-  store/store.go               JSONL log: Append, ReadAll, ClearPane
+  store/store.go               JSONL log: Append, ReadAll, ClearPane, HasUnclearedPane
   tmux/tmux.go                 tmux command helpers
-  setup/setup.go               ~/.claude/settings.json hook check
+  setup/setup.go               ~/.claude/settings.json hook check + auto-configure
   ui/model.go                  bubbletea dashboard TUI
 Taskfile.yml                   build / dev / test / lint / setup tasks
 architecture.md                this file (update with every change)
@@ -113,6 +119,10 @@ DEVELOPMENT.md                 ordered development items
 | TUI | bubbletea + lipgloss | no fzf runtime dependency, full color control |
 | Keybinding | TPM option `@claude-notify-key` | user-overridable, standard TPM convention |
 | Hook install | auto-write if missing, read-only check otherwise | friction of manual setup outweighs risk of touching user file |
-| Pane pop | persistent `window-active-style bg=@tmux-pop-color` | stays until cleared — no timer, no goroutine; cosmetic only so errors ignored |
+| Pane pop | persistent `window-active-style bg=<color>` | stays until cleared — no timer, no goroutine; cosmetic only so errors ignored |
+| Pop color | `@claude-notify-pop-color` → `@tmux-pop-color` → `#1e1e2e` fallback | visible on black terminal; compatible with Catppuccin Mocha |
 | Dashboard keybinding | grimoire shpell if present, `display-popup` fallback | grimoire provides native toggle (C-M-p again to close); popup requires explicit q/esc |
-| Dashboard selection | stay open until list empty, then auto-quit | allows handling multiple pending notifications in one session |
+| Dashboard selection | stay open until list empty, then DetachIfShpell | allows handling multiple pending notifications in one session |
+| Auto-clear hook | none (removed) | pane-focus-in broken in WSL2; after-select-window fires on any tmux command |
+| Idempotent notify | `HasUnclearedPane` before Append | Stop + PreToolUse both fire multiple times per turn; only first creates JSONL entry |
+| Hooks registered | Stop + PreToolUse | Stop = end of turn; PreToolUse = start of tool work; together cover all "claude needs attention" moments |
