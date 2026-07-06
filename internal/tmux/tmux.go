@@ -140,6 +140,13 @@ func IsPaneFocused(paneID string) bool {
 	return err == nil && out == "11"
 }
 
+// IsShpellOpen returns true when the grimoire shpell popup session is live,
+// meaning the claude-notify dashboard is currently displayed.
+func IsShpellOpen() bool {
+	_, err := exec.Command("tmux", "has-session", "-t", "_shpell-session").Output()
+	return err == nil
+}
+
 // ActiveResetSeconds reads @claude-notify-active-reset-seconds from global tmux
 // options. Returns 15 if unset, 0 if explicitly "0" (disables auto-reset).
 func ActiveResetSeconds() int {

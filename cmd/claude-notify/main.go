@@ -133,10 +133,13 @@ func runClear(paneID string) error {
 	return store.ClearPane(paneID)
 }
 
-// runAutoReset sleeps delaySecs then clears the notification if still uncleared.
-// Runs in a detached subprocess; errors are silently ignored.
+// runAutoReset sleeps delaySecs then clears the notification if still uncleared
+// and the dashboard popup is not open. Runs in a detached subprocess.
 func runAutoReset(paneID string, delaySecs int) {
 	time.Sleep(time.Duration(delaySecs) * time.Second)
+	if tmuxclient.IsShpellOpen() {
+		return
+	}
 	uncleared, _ := store.HasUnclearedPane(paneID)
 	if uncleared {
 		_ = runClear(paneID)
