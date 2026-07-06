@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/timer"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/fsnotify/fsnotify"
@@ -48,13 +49,15 @@ type entry struct {
 }
 
 type model struct {
-	entries          []entry
-	cursor           int
-	setupResult      setup.Result
-	setupMessage     string
-	watcher          *fsnotify.Watcher
+	entries           []entry
+	cursor            int
+	setupResult       setup.Result
+	setupMessage      string
+	toast             string
+	toastTimer        timer.Model
+	watcher           *fsnotify.Watcher
 	transcriptWatcher *watcher.Watcher
-	quitting         bool
+	quitting          bool
 }
 
 func newModel() (model, error) {
@@ -78,6 +81,10 @@ func newModel() (model, error) {
 
 	m := model{watcher: fw, transcriptWatcher: tw}
 	m.setupResult, m.setupMessage = checkAndConfigure()
+	if m.setupMessage != "" {
+		m.toast = m.setupMessage
+		m.toastTimer = timer.NewWithInterval(10*time.Second, time.Second)
+	}
 	m.entries = loadEntries()
 
 	// Reconcile store against live transcript state before first render.
@@ -91,14 +98,33 @@ func newModel() (model, error) {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(watchCmd(m.watcher), watcherCmd(m.transcriptWatcher))
+	cmds := []tea.Cmd{watchCmd(m.watcher), watcherCmd(m.transcriptWatcher)}
+	if m.toast != "" {
+		cmds = append(cmds, m.toastTimer.Init())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case settingsChangedMsg:
 		m.setupResult, m.setupMessage = checkAndConfigure()
+		if m.setupMessage != "" {
+			m.toast = m.setupMessage
+			m.toastTimer = timer.NewWithInterval(10*time.Second, time.Second)
+			return m, tea.Batch(watchCmd(m.watcher), m.toastTimer.Init())
+		}
 		return m, watchCmd(m.watcher)
+
+	case timer.TickMsg:
+		var cmd tea.Cmd
+		m.toastTimer, cmd = m.toastTimer.Update(msg)
+		return m, cmd
+
+	case timer.TimeoutMsg:
+		m.toastTimer, _ = m.toastTimer.Update(msg)
+		m.toast = ""
+		return m, nil
 
 	case notificationsChangedMsg:
 		m.entries = loadEntries()
@@ -156,7 +182,13 @@ func (m model) View() string {
 
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("claude-notify") + "\n")
-	b.WriteString(m.renderSetupStatus() + "\n\n")
+	if status := m.renderSetupStatus(); status != "" {
+		b.WriteString(status + "\n")
+	}
+	if m.toast != "" {
+		b.WriteString(statusOK.Render("✓ "+m.toast) + "\n")
+	}
+	b.WriteString("\n")
 
 	if len(m.entries) == 0 {
 		b.WriteString(dimStyle.Render("No pending notifications.") + "\n")
@@ -192,11 +224,7 @@ func renderStatusBadge(status string) string {
 func (m model) renderSetupStatus() string {
 	switch m.setupResult.Status {
 	case setup.StatusConfigured:
-		line := statusOK.Render("✓ hook configured")
-		if m.setupMessage != "" {
-			line += "\n" + dimStyle.Render("  "+m.setupMessage)
-		}
-		return line
+		return ""
 	case setup.StatusNotConfigured:
 		return statusWarn.Render("⚠ hook not configured") + "\n" + dimStyle.Render("  "+m.setupResult.Message)
 	default:
