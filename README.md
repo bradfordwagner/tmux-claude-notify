@@ -74,6 +74,7 @@ Press `C-M-p` (default) to open the notification dashboard. Select an entry with
 | `@claude-notify-key` | `C-M-p` | Keybinding to open the dashboard |
 | `@claude-notify-pop-color` | `#1e1e2e` | Pane background color when waiting (falls back to `@tmux-pop-color`, then `#1e1e2e`) |
 | `@claude-notify-stale-minutes` | `5` | Minutes of transcript inactivity before marking a session stale |
+| `@claude-notify-active-reset-seconds` | `15` | Seconds before auto-clearing a notification when the notified pane is already focused. Set to `0` to disable auto-reset. |
 
 ## Grimoire integration
 
