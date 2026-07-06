@@ -39,12 +39,16 @@ func Session(paneID string) (string, error) {
 }
 
 func SetWindowStyle(windowID string) error {
-	_, err := run("set-option", "-t", windowID, "window-status-style", "fg=#AD8EE6,bold")
+	if _, err := run("set-option", "-t", windowID, "window-status-style", "fg=#AD8EE6,bold"); err != nil {
+		return err
+	}
+	_, err := run("set-option", "-t", windowID, "window-status-current-style", "fg=#AD8EE6,bold")
 	return err
 }
 
 func ClearWindowStyle(windowID string) error {
-	_, err := run("set-option", "-u", "-t", windowID, "window-status-style")
+	_, _ = run("set-option", "-u", "-t", windowID, "window-status-style")
+	_, err := run("set-option", "-u", "-t", windowID, "window-status-current-style")
 	return err
 }
 

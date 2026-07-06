@@ -56,13 +56,16 @@ func Check() Result {
 		return Result{Status: StatusUnknown, Message: "cannot parse ~/.claude/settings.json: " + parseErr.Error()}
 	}
 	if configured {
-		return Result{Status: StatusConfigured, Message: "Stop hook configured"}
+		return Result{Status: StatusConfigured, Message: "[" + strings.Join(hookEvents, ",") + "] hooks configured"}
 	}
 	return Result{Status: StatusNotConfigured}
 }
 
-// Configure adds the Stop hook to settings.json if missing, creating the file
-// if it does not exist. Returns a message describing what happened.
+// hookEvents lists all event types this plugin registers.
+var hookEvents = []string{"Stop", "PreToolUse"}
+
+// Configure adds Stop and PreToolUse hooks to settings.json if missing,
+// creating the file if it does not exist. Returns a message describing what happened.
 func Configure() (string, error) {
 	binary, _ := os.Executable()
 	path := SettingsPath()
@@ -80,25 +83,14 @@ func Configure() (string, error) {
 			return "", err
 		}
 		if ok, _ := isConfigured(data); ok {
-			return "Stop hook already configured", nil
+			return "hooks already configured", nil
 		}
 	}
 
-	// Build the new matcher entry.
 	newMatcher := hookMatcher{
 		Matcher: "",
 		Hooks:   []hookCommand{{Type: "command", Command: binary + " notify"}},
 	}
-
-	// Merge into existing Stop array, preserving any other matchers.
-	var existingStop []hookMatcher
-	if hooksRaw, ok := raw["hooks"]; ok {
-		var hooksMap map[string][]hookMatcher
-		if err := json.Unmarshal(hooksRaw, &hooksMap); err == nil {
-			existingStop = hooksMap["Stop"]
-		}
-	}
-	existingStop = append(existingStop, newMatcher)
 
 	// Merge with any other hook event types already present.
 	mergedHooks := map[string]json.RawMessage{}
@@ -110,11 +102,28 @@ func Configure() (string, error) {
 			}
 		}
 	}
-	stopRaw, err := json.Marshal(existingStop)
-	if err != nil {
-		return "", err
+
+	// Add each hook event if not already present.
+	var hooksMap map[string][]hookMatcher
+	if hooksRaw, ok := raw["hooks"]; ok {
+		_ = json.Unmarshal(hooksRaw, &hooksMap)
 	}
-	mergedHooks["Stop"] = stopRaw
+	if hooksMap == nil {
+		hooksMap = make(map[string][]hookMatcher)
+	}
+	for _, event := range hookEvents {
+		if !hasNotifyHook(hooksMap[event]) {
+			hooksMap[event] = append(hooksMap[event], newMatcher)
+		}
+	}
+
+	for _, event := range hookEvents {
+		raw, err := json.Marshal(hooksMap[event])
+		if err != nil {
+			return "", err
+		}
+		mergedHooks[event] = raw
+	}
 
 	hooksRaw, err := json.Marshal(mergedHooks)
 	if err != nil {
@@ -138,7 +147,7 @@ func Configure() (string, error) {
 	if len(data) > 0 {
 		action = "updated"
 	}
-	return "Stop hook added — " + action + " ~/.claude/settings.json", nil
+	return "hooks added — " + action + " ~/.claude/settings.json", nil
 }
 
 func isConfigured(data []byte) (bool, error) {
@@ -148,12 +157,21 @@ func isConfigured(data []byte) (bool, error) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return false, err
 	}
-	for _, matcher := range s.Hooks["Stop"] {
-		for _, cmd := range matcher.Hooks {
+	for _, event := range hookEvents {
+		if !hasNotifyHook(s.Hooks[event]) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func hasNotifyHook(matchers []hookMatcher) bool {
+	for _, m := range matchers {
+		for _, cmd := range m.Hooks {
 			if strings.Contains(cmd.Command, "claude-notify notify") {
-				return true, nil
+				return true
 			}
 		}
 	}
-	return false, nil
+	return false
 }

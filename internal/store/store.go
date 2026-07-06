@@ -74,6 +74,21 @@ func ReadAll() ([]Record, error) {
 	return records, nil
 }
 
+// HasUnclearedPane returns true if there is already an uncleared notification
+// for the given pane. Used by runNotify to avoid duplicate entries.
+func HasUnclearedPane(paneID string) (bool, error) {
+	records, err := ReadAll()
+	if err != nil {
+		return false, err
+	}
+	for _, r := range records {
+		if !r.Cleared && r.Pane == paneID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func ClearPane(paneID string) error {
 	path := LogPath()
 	f, err := os.Open(path)
