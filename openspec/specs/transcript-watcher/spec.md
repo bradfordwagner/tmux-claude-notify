@@ -34,7 +34,7 @@ On each write to a transcript file, the watcher SHALL read the tail of the file,
 - **THEN** the derived state is `waiting`
 
 #### Scenario: No transcript activity for extended period → stale
-- **WHEN** no new events have appeared in the transcript for more than 5 minutes
+- **WHEN** no new events have appeared in the transcript for more than `@claude-notify-stale-minutes` minutes (default 5)
 - **THEN** the derived state is `stale`
 
 #### Scenario: Malformed JSONL line — skipped
@@ -42,19 +42,24 @@ On each write to a transcript file, the watcher SHALL read the tail of the file,
 - **THEN** that line is skipped and parsing continues with the next line
 
 ### Requirement: Watcher maps transcript path to tmux pane
-The watcher SHALL decode the Claude Code project directory from the encoded path segment of the transcript file (`~/.claude/projects/<encoded-path>/`) and correlate it with a live tmux pane running in that directory.
+The watcher SHALL correlate each transcript with a live tmux pane by forward-encoding the pane's `pane_current_path` (replacing `/` and `.` with `-`) and looking up the resulting directory under `~/.claude/projects/`. Only panes whose `pane_current_command` matches the prefix `claude*` are considered.
 
-#### Scenario: Project dir decoded from encoded path
-- **WHEN** a transcript file lives at `~/.claude/projects/-home-bw-foo-bar/session.jsonl`
-- **THEN** the decoded project directory is `/home/bw/foo/bar`
+#### Scenario: Pane path forward-encoded to project dir
+- **WHEN** a live tmux pane has `pane_current_path=/home/bw/foo.bar` and `pane_current_command=claude`
+- **THEN** the encoded project directory is `-home-bw-foo-bar`
+- **AND** the watcher looks for `~/.claude/projects/-home-bw-foo-bar/` to find transcripts
 
-#### Scenario: Pane matched by working directory
-- **WHEN** the decoded project directory matches the `pane_current_path` of a live tmux pane running `claude`
-- **THEN** that pane is associated with the transcript's state
+#### Scenario: Pane matched by encoded working directory
+- **WHEN** the forward-encoded path matches an existing project directory under `~/.claude/projects/`
+- **THEN** that pane is associated with the most recently modified transcript in that directory
 
-#### Scenario: No matching pane — notification suppressed
-- **WHEN** no live tmux pane matches the decoded project directory
-- **THEN** no notification is fired for that transcript
+#### Scenario: No matching pane — transcript not watched
+- **WHEN** no live tmux pane with a `claude*` command has a path that encodes to the project directory
+- **THEN** no fsnotify watch is registered for transcripts in that directory
+
+#### Scenario: Non-claude pane excluded
+- **WHEN** a pane's `pane_current_command` does not match the prefix `claude*`
+- **THEN** it is not considered for pane correlation, regardless of its working directory
 
 ### Requirement: Watcher limits active file watches
 The watcher SHALL only register fsnotify watches for transcript files last modified within the past 24 hours, to avoid accumulating watches for old sessions.
