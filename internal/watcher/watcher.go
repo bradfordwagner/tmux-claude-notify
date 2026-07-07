@@ -13,6 +13,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
+	claudepkg "github.com/bradfordwagner/tmux-claude-notify/internal/claude"
 	"github.com/bradfordwagner/tmux-claude-notify/internal/sessions"
 )
 
@@ -154,9 +155,9 @@ func (w *Watcher) discoverWithPanes(panes []claudePane) {
 
 	w.mu.Lock()
 	for _, p := range panes {
-		encoded := encodeProjectPath(p.currentPath)
+		encoded := claudepkg.EncodeProjectPath(p.currentPath)
 		dir := filepath.Join(projectsDir, encoded)
-		transcript := latestTranscript(dir)
+		transcript := claudepkg.LatestTranscriptPath(dir)
 		if transcript == "" {
 			continue
 		}
@@ -303,37 +304,6 @@ func listClaudePanes() ([]claudePane, error) {
 	return panes, nil
 }
 
-// encodeProjectPath maps a filesystem path to the directory name Claude Code
-// uses in ~/.claude/projects/. Claude Code replaces both "/" and "." with "-".
-func encodeProjectPath(path string) string {
-	return strings.NewReplacer("/", "-", ".", "-").Replace(path)
-}
-
-// latestTranscript returns the most recently modified .jsonl file in dir
-// that was modified within the past 24 hours.
-func latestTranscript(dir string) string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return ""
-	}
-	cutoff := time.Now().Add(-24 * time.Hour)
-	var latest string
-	var latestMod time.Time
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil || info.ModTime().Before(cutoff) {
-			continue
-		}
-		if info.ModTime().After(latestMod) {
-			latestMod = info.ModTime()
-			latest = filepath.Join(dir, e.Name())
-		}
-	}
-	return latest
-}
 
 type transcriptEvent struct {
 	Type    string        `json:"type"`

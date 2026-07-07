@@ -7,6 +7,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bradfordwagner/tmux-claude-notify/internal/resurrect"
 	"github.com/bradfordwagner/tmux-claude-notify/internal/store"
 	tmuxclient "github.com/bradfordwagner/tmux-claude-notify/internal/tmux"
 	"github.com/bradfordwagner/tmux-claude-notify/internal/ui"
@@ -39,6 +40,15 @@ func main() {
 		}
 		if err := runClear(paneID); err != nil {
 			_ = err
+		}
+	case "resurrect":
+		if len(os.Args) >= 3 {
+			switch os.Args[2] {
+			case "save":
+				_ = resurrect.Save()
+			case "restore":
+				_ = resurrect.Restore()
+			}
 		}
 	case "auto-reset":
 		paneID := ""

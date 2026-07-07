@@ -170,13 +170,13 @@ The watcher runs embedded in the dashboard TUI process (not a daemon):
 
 ```
 internal/watcher/watcher.go
-  ├─ listClaudePanes()     → tmux list-panes, filter pane_current_command prefix "claude*"
-  ├─ encodeProjectPath()   → replace "/" and "." with "-" to match ~/.claude/projects/<dir>
-  ├─ latestTranscript()    → most recent .jsonl in project dir, modified < 24h ago
-  ├─ tailTranscript()      → read last 20 lines of transcript JSONL
-  ├─ deriveStatus()        → walk events newest-first, return (Status, clear bool)
-  ├─ staleDuration()       → read @claude-notify-stale-minutes option, default 5m
-  └─ Reconcile()           → scan all tracked panes, return current StateChange slice
+  ├─ listClaudePanes()               → tmux list-panes, filter pane_current_command prefix "claude*"
+  ├─ claude.EncodeProjectPath()      → replace "/" and "." with "-" to match ~/.claude/projects/<dir>
+  ├─ claude.LatestTranscriptPath()   → most recent .jsonl in project dir, within TranscriptMaxAge
+  ├─ tailTranscript()                → read last 20 lines of transcript JSONL
+  ├─ deriveStatus()                  → walk events newest-first, return (Status, clear bool)
+  ├─ staleDuration()                 → read @claude-notify-stale-minutes option, default 5m
+  └─ Reconcile()                     → scan all tracked panes, return current StateChange slice
 ```
 
 Pane correlation: given a pane's `pane_current_path`, encode it and look up
@@ -191,6 +191,8 @@ cmd/claude-notify/main.go      binary entry point + subcommand routing
 internal/
   store/store.go               notifications.jsonl: Append, ReadAll, ClearPane, HasUnclearedPane, UpdateStatus, WindowForPane, UnclearedForWindow
   sessions/sessions.go         sessions.jsonl: SessionRecord, Upsert, ReadAll, SetPinned, Compact, DiscoverAll, RecoverPath
+  claude/transcript.go         shared: EncodeProjectPath, LatestTranscriptPath/ID, TranscriptMaxAge (@claude-notify-transcript-age-days, default 14d)
+  resurrect/resurrect.go       resurrect.json: Save (snapshot claude panes), Restore (replay --resume into panes)
   tmux/tmux.go                 tmux command helpers (IsPanePopped: show-options -p window-style → pop indicator)
   setup/setup.go               ~/.claude/settings.json hook check + auto-configure
   watcher/watcher.go           transcript file watcher: state derivation, pane correlation, sessions.Upsert on discovery
@@ -231,6 +233,43 @@ DEVELOPMENT.md                 ordered development items
       ├─ L1 project row: OuterSession() → tmux neww/split-window -c <path> -t <outer> -- claude  (fresh)
       └─ L2 closed session: OuterSession() → tmux neww/split-window -c <path> -t <outer> -- claude --resume <session_id>
           └─► DetachIfShpell (close popup)
+```
+
+## Data Flow: Resurrect
+
+```
+ claude-notify resurrect save
+      │
+      ├─ tmux list-panes -a → filter pane_current_command starts with "claude*"
+      │
+      ├─ sessions.ReadAll() → build map[pane_id → SessionRecord]
+      │
+      └─ for each claude pane:
+           ├─ pane_id in sessions map?
+           │     YES → session_id + project_path from SessionRecord
+           │     NO  → latestTranscriptID(pane_current_path) → scan ~/.claude/projects/<encoded>/
+           │
+           ├─ no session_id derivable → skip pane silently
+           │
+           └─ append ResurrectPane{tmux_session, window_index, pane_index,
+                                   pane_id, session_id, project_path}
+      │
+      └─► write ResurrectState (JSON) → ~/.local/share/tmux-claude-notify/resurrect.json
+          (atomic temp-file + rename)
+
+ claude-notify resurrect restore
+      │
+      ├─ Load() resurrect.json → empty/missing → exit 0 (no-op)
+      │
+      ├─ tmux list-panes -a → build map[(session, window_idx, pane_idx) → live pane]
+      │
+      └─ for each saved entry:
+           ├─ no matching live pane → skip silently
+           ├─ live pane_current_command starts with "claude" → skip (idempotent)
+           ├─ pane_current_path == project_path?
+           │     YES → send "claude --resume <session_id>"
+           │     NO  → send "cd <project_path> && claude --resume <session_id>"
+           └─► tmux send-keys -t <pane_id> <cmd> Enter
 ```
 
 ## Key Design Decisions
