@@ -88,19 +88,24 @@ User invokes keybinding (C-M-p by default):
                   ├──► set-option -p window-style bg=<color>  (pane pop bg, pane-scoped)
                   ├──► notify-send                      (desktop toast, optional)
                   │
-                  └──► active-pane auto-reset (always, when delaySecs > 0)
+                  └──► auto-reset subprocess (when delaySecs > 0 OR navDelaySecs > 0)
                        │  reads @claude-notify-active-reset-seconds (default 15; 0=off)
+                       │  reads @claude-notify-nav-clear-seconds    (default  2; 0=off)
                        │
                        └─► forkAutoReset → detached subprocess (Setsid, closed stdio)
+                                │  args: --pane <id> --delay <activeResetSecs> --nav-delay <navClearSecs>
                                 │
-                                ├─ window_active=1 at start? (focused at notify time)
-                                │     yes → sleep N seconds → check IsShpellOpen + HasUnclearedPane → runClear
+                                ├─ IsPaneFocused? (window_active=1 AND pane_active=1)
+                                │     yes, delaySecs > 0 → sleep delaySecs → check IsShpellOpen + HasUnclearedPane → runClear
+                                │     yes, delaySecs = 0 → exit (already-focused clear disabled)
                                 │
-                                └─ window_active=0 at start? (pane in inactive window)
+                                └─ not focused (different pane or different window)
                                       poll every 2s (up to 4h):
                                       ├─ HasUnclearedPane? no → exit (cleared by other means)
                                       ├─ IsShpellOpen? yes → continue (dashboard handles it)
-                                      └─ window_active=1? yes → sleep N seconds (grace period) → runClear
+                                      └─ IsPaneFocused? (window_active=1 AND pane_active=1)
+                                            yes, navDelaySecs > 0 → sleep navDelaySecs → runClear
+                                            yes, navDelaySecs = 0 → exit (nav-clear disabled)
 
  Transcript watcher fires (while dashboard is open)
       │
@@ -242,7 +247,9 @@ DEVELOPMENT.md                 ordered development items
 | Dashboard keybinding | grimoire shpell if present, `display-popup` fallback | grimoire provides native toggle (C-M-p again to close); popup requires explicit q/esc |
 | Dashboard selection | stay open until list empty, then DetachIfShpell | allows handling multiple pending notifications in one session |
 | Auto-clear hook | none (removed) | pane-focus-in broken in WSL2; after-select-window fires on any tmux command |
-| Active-pane auto-reset | detached subprocess always spawned, `@claude-notify-active-reset-seconds` (default 15; 0=off) | clears pop when user navigates to pane (poll) or after grace period if already focused; pane-focus-in broken in WSL2 so polling subprocess is the mechanism |
+| Active-pane auto-reset | detached subprocess spawned when either delay > 0; `@claude-notify-active-reset-seconds` (default 15; 0=off) | clears pop after grace period when user was already in the pane at notify time |
+| Navigate-to-clear | polling subprocess uses `@claude-notify-nav-clear-seconds` (default 2; 0=off) for poll-detected focus | entering a popped pane feels instant (2s); separate from grace period so "already watching" and "navigated to" are tuned independently |
+| Pane-level focus detection | `IsPaneFocused` checks `#{window_active}#{pane_active}` (both must be 1) | sibling split panes in the same window share `window_active=1`; without `pane_active`, navigating to a sibling pane would erroneously trigger nav-clear on unrelated notified panes |
 | Idempotent notify | `HasUnclearedPane` before Append | Stop fires multiple times per skill invocation; only first call creates JSONL entry |
 | Multi-pane window clearing | `UnclearedForWindow` after `ClearPane` gates style teardown | clearing one pane must not remove the window highlight while sibling panes still have uncleared notifications |
 | Gone-pane visibility | show all uncleared entries; `(gone)` in PATH when pane missing | live-pane filter silently hides valid notifications (e.g. ~/dotfiles session after pane restart) |
