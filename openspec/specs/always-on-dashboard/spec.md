@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The always-on dashboard is the bubbletea TUI that runs when `claude-notify` is invoked with no arguments. It displays the current notification state for all tracked tmux panes, integrates a transcript watcher to keep state current without user interaction, and auto-refreshes as transcript events arrive.
+The always-on dashboard is the bubbletea TUI that runs when `claude-notify` is invoked with no arguments. It displays current notification state for all tracked tmux panes, integrates a transcript watcher to keep state current without user interaction, and provides a Sessions view for browsing and resuming historical Claude sessions.
 
 ## Requirements
 
@@ -12,7 +12,7 @@ When the dashboard TUI starts (`claude-notify` with no args), it SHALL initializ
 #### Scenario: Watcher started on dashboard open
 - **WHEN** `claude-notify` is invoked with no arguments
 - **THEN** the bubbletea model initializes with a transcript watcher active
-- **AND** the watcher begins scanning `~/.claude/projects/` for active transcript files
+- **AND** the watcher begins scanning active claude panes via `tmux list-panes`
 
 #### Scenario: Watcher stopped on dashboard close
 - **WHEN** the user presses `q`, `esc`, or `ctrl+c`
@@ -28,31 +28,46 @@ On startup, after loading the JSONL notification log, the dashboard SHALL scan a
 
 #### Scenario: "Waiting" entry confirmed on open
 - **WHEN** the JSONL store has an uncleared entry for a pane
-- **AND** the transcript confirms the agent is still waiting (last event was `assistant` message with silence)
+- **AND** the transcript confirms the agent is still waiting
 - **THEN** the entry is left unchanged
 
 #### Scenario: No transcript found for stored entry
 - **WHEN** the JSONL store has an uncleared entry for a pane but no matching transcript file is found
 - **THEN** the entry is left unchanged (Stop hook wrote it; treated as valid waiting state)
 
-### Requirement: Dashboard renders agent status per entry
-Each dashboard entry SHALL display the agent status with an icon and color as the first column, followed by window name, pane current path, session name, and age. The raw pane ID SHALL NOT appear in the rendered row. A header row and separator SHALL appear above the entry list when entries are present.
+### Requirement: Dashboard has two views toggled by Tab
+The TUI SHALL have a Notifications view (default) and a Sessions view. Pressing `Tab` cycles between them. The active view is shown in a header bar with the active tab highlighted in the accent color (`#AD8EE6`) and the inactive tab dimmed.
+
+#### Scenario: Default view is Notifications
+- **WHEN** the dashboard opens
+- **THEN** the Notifications view is active and "[ Notifications ]" is highlighted in the header
+
+#### Scenario: Tab switches to Sessions view
+- **WHEN** the user presses `Tab` while in Notifications view
+- **THEN** the Sessions view becomes active and "[ Sessions ]" is highlighted
+
+#### Scenario: Tab switches back to Notifications view
+- **WHEN** the user presses `Tab` while in Sessions view
+- **THEN** the Notifications view becomes active
+
+### Requirement: Dashboard renders agent status per entry in Notifications view
+Each Notifications view entry SHALL display STATUS (icon + text), PIN (📌 or blank), WINDOW name, PATH (last two components, `~`-abbreviated, max 25 visual columns), SESSION name, and AGE. The raw pane ID SHALL NOT appear. A header row and separator SHALL appear above the entry list when entries are present.
 
 #### Scenario: Waiting entry styled with accent color
 - **WHEN** an entry has `status: waiting`
-- **THEN** it is rendered with "⏳ waiting" in the `#AD8EE6` accent color as the first column
+- **THEN** it is rendered with "⏳ waiting" in the `#AD8EE6` accent color
 
 #### Scenario: Running entry styled with warn color
 - **WHEN** an entry has `status: running`
-- **THEN** it is rendered with "⚙  running" in the warn/orange color as the first column
+- **THEN** it is rendered with "⚙  running" in the warn/orange color
 
 #### Scenario: Stale entry styled with dim color
 - **WHEN** an entry has `status: stale`
-- **THEN** it is rendered with "💤 stale" in the dim/subtle color as the first column
+- **THEN** it is rendered with "💤 stale" in the dim/subtle color
 
 #### Scenario: Column headers rendered above entries
 - **WHEN** one or more entries are displayed
-- **THEN** a header row ("STATUS WINDOW PATH SESSION AGE") and separator line appear above the first entry
+- **THEN** a header row "STATUS  PIN  WINDOW  PATH  SESSION  AGE" and separator appear above the first entry
 
 #### Scenario: Path column shows pane working directory
 - **WHEN** an entry is rendered
@@ -68,3 +83,85 @@ When the transcript watcher detects a state change while the dashboard is open, 
 #### Scenario: User message in transcript clears notification
 - **WHEN** the transcript watcher sees a `user` message event (user responded to claude)
 - **THEN** `store.ClearPane` is called and the entry is removed from the dashboard
+
+### Requirement: Sessions view is a two-level drill-in table
+The Sessions view SHALL display a Level-1 projects table (one row per project, plus "📌 Pinned" group). `enter` on a project row drills into Level-2 (session rows for that project). `esc` in Level-2 returns to Level-1; `esc` in Level-1 quits the dashboard.
+
+#### Scenario: Level-1 shows one row per project
+- **WHEN** the Sessions view is activated
+- **THEN** a table is rendered with columns STATUS, PROJECT, COUNT, LAST USED
+
+#### Scenario: enter on Level-1 row drills in
+- **WHEN** the user presses `enter` on a project row
+- **THEN** Level-2 shows session rows for that project
+
+#### Scenario: esc in Level-2 returns to Level-1
+- **WHEN** the user presses `esc` while in Level-2
+- **THEN** the view returns to Level-1
+
+#### Scenario: esc in Level-1 quits
+- **WHEN** the user presses `esc` while in Level-1
+- **THEN** the dashboard closes
+
+### Requirement: `s` key cycles sort in Sessions view
+Pressing `s` in the Sessions view SHALL cycle the sort field between `age` (default, most recently active first) and `status` (most urgent first). The active sort field is shown in the tab header. Pinned sessions always float above unpinned within any sort order.
+
+#### Scenario: Default sort is age
+- **WHEN** the Sessions view first opens
+- **THEN** sessions are sorted by most recent `last_activity`
+- **AND** the header shows "sort: age"
+
+#### Scenario: s advances sort to status
+- **WHEN** the user presses `s` with sort=age active
+- **THEN** sessions are sorted by urgency (waiting > running > stale > idle)
+- **AND** the header shows "sort: status"
+
+### Requirement: `f` key toggles active-pane filter in Sessions view
+Pressing `f` SHALL toggle a filter that limits displayed sessions to those with a non-empty `pane_id`. Pinned sessions always appear regardless of filter state.
+
+#### Scenario: f activates filter
+- **WHEN** the user presses `f`
+- **THEN** only projects with active sessions (and "📌 Pinned") are shown
+- **AND** the header shows "filter: active panes"
+
+#### Scenario: f deactivates filter
+- **WHEN** the user presses `f` again
+- **THEN** all sessions are shown and the filter indicator is removed
+
+### Requirement: `p` key toggles pin on selected session in Level-2
+In Level-2, pressing `p` SHALL toggle the `pinned` flag on the currently selected session. Pinned sessions persist in `sessions.jsonl` and appear in both the Sessions view and the Notifications view (even when no active pane).
+
+#### Scenario: p pins a session
+- **WHEN** the cursor is on an unpinned session and the user presses `p`
+- **THEN** the session's `pinned` flag is set to `true` and 📌 appears in the PIN column
+
+#### Scenario: p unpins a session
+- **WHEN** the cursor is on a pinned session and the user presses `p`
+- **THEN** the session's `pinned` flag is set to `false`
+
+### Requirement: `enter`/`r` navigates to or resumes selected session
+In Level-2, pressing `enter` or `r` on a session with an active pane SHALL call `SelectPane` + `SelectWindow` to navigate to that pane, then `DetachIfShpell` to close the popup. For closed sessions (no `pane_id`), `r` SHALL launch `tmux neww -c <path> -- claude --resume <session_id>`.
+
+#### Scenario: enter on active session navigates to pane
+- **WHEN** the selected session has a non-empty `pane_id`
+- **AND** the user presses `enter` or `r`
+- **THEN** `SelectPane(paneID)` and `SelectWindow(session, windowID)` are called, then `DetachIfShpell`
+
+#### Scenario: r on closed session resumes claude
+- **WHEN** the selected session has an empty `pane_id`
+- **AND** the user presses `r`
+- **THEN** `tmux neww -c <recovered_path> -- claude --resume <session_id>` is executed
+
+#### Scenario: No active pane in Notifications view
+- **WHEN** the selected Notifications entry is a session-only entry with no active pane
+- **AND** the user presses `enter`
+- **THEN** a toast "No active pane — switch to Sessions tab to resume" is shown
+
+### Requirement: enter in Notifications view clears notification and navigates
+Pressing `enter` on a Notifications entry SHALL clear the notification (if from notifications.jsonl), navigate to the window via `SelectPane` + `SelectWindow`, and close the popup.
+
+#### Scenario: enter clears and navigates
+- **WHEN** the user presses `enter` on a notifications.jsonl-backed entry
+- **THEN** `ClearPopStyle`, `UnregisterClearHook`, and `store.ClearPane` are called
+- **AND** `SelectPane(paneID)` + `SelectWindow(session, windowID)` navigate to the pane
+- **AND** `DetachIfShpell` closes the popup

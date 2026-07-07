@@ -37,18 +37,29 @@ TPM load time (tmux startup):
 
 User invokes keybinding (C-M-p by default):
   bin/claude-notify  (no args → dashboard)
-  ├─ setup.Check()        → reads ~/.claude/settings.json, auto-configures if missing
-  ├─ store.ReadAll()      → parse notifications.jsonl, sort by ts desc
-  ├─ watcher.Reconcile()  → scan active transcripts, correct stale JSONL entries
-  ├─ tmux list-panes -a   → build live-pane set (all uncleared entries shown; gone panes get "(gone)" path)
-  └─ bubbletea TUI  (fsnotify auto-refresh on JSONL/settings; transcript watcher for live state)
+  ├─ setup.Check()           → reads ~/.claude/settings.json, auto-configures if missing
+  ├─ sessions.Compact(90d)   → remove old unpinned inactive session records from sessions.jsonl
+  ├─ store.ReadAll()         → parse notifications.jsonl, sort by ts desc
+  ├─ watcher.Reconcile()     → scan active transcripts, correct stale JSONL entries
+  │   ├─ sessions.Upsert     → record real project path + pane IDs for every active pane
+  │   └─ clearInactivePaneSessions → clear pane fields for sessions whose pane is gone
+  ├─ tmux list-panes -a      → build live-pane set
+  ├─ sessions.ReadAll()      → merge active + pinned sessions into Notifications view
+  └─ bubbletea TUI  (fsnotify auto-refresh; transcript watcher; Tab to switch views)
+      ├─ Notifications view  (default): notifications + active sessions + pinned idle sessions
+      │   ├─ enter: clear notification + SelectWindow + DetachIfShpell
+      │   ├─ p: pin/unpin session via sessions.SetPinned
+      │   └─ tab: switch to Sessions view
+      ├─ Sessions view: all sessions grouped by project (📌 Pinned group first, then alpha)
+      │   ├─ s: cycle within-group sort (age ↔ status)
+      │   ├─ f: toggle filter to active panes only (pinned always shown)
+      │   ├─ p: pin/unpin session via sessions.SetPinned
+      │   ├─ enter/r (active pane): SelectWindow + DetachIfShpell
+      │   ├─ enter/r (closed session): sessions.RecoverPath → tmux neww -c <path> -- claude --resume <uuid>
+      │   └─ tab: switch to Notifications view
       ├─ transcript watcher: watches ~/.claude/projects/**/*.jsonl via fsnotify
       │   ├─ state change → running/waiting/stale → UpdateStatus or Append
       │   └─ user message  → ClearPane + ClearWindowStyle (user responded)
-      ├─ select entry → store.WindowForPane + store.ClearPane
-      │                  + store.UnclearedForWindow ──► ClearWindowStyle + ClearPopStyle
-      │                  │   (window styles cleared only when last notified pane in window dismissed)
-      │                  + SelectWindow (session-level) + DetachIfShpell
       └─ q/esc → close transcript watcher + DetachIfShpell → tea.Quit
 ```
 
@@ -61,7 +72,7 @@ User invokes keybinding (C-M-p by default):
  claude-notify notify
       │
       ├─ HasUnclearedPane(paneID)?
-      │     yes ──► re-apply window-status-style + select-pane -P (pane pop)
+      │     yes ──► re-apply window-status-style + set-option -p window-style (pane pop)
       │             (idempotent; no new JSONL entry)
       │
       └─── no ──► first notification for this pane
@@ -71,7 +82,7 @@ User invokes keybinding (C-M-p by default):
                   │
                   ├──► tmux window-status-style        (tab: #AD8EE6,bold)
                   ├──► tmux window-status-current-style (active tab: same)
-                  ├──► select-pane -P bg=<color>         (pane pop bg, pane-scoped)
+                  ├──► set-option -p window-style bg=<color>  (pane pop bg, pane-scoped)
                   ├──► notify-send                      (desktop toast, optional)
                   │
                   └──► active-pane auto-reset (if pane is currently focused)
@@ -118,10 +129,11 @@ User invokes keybinding (C-M-p by default):
       ├──► store.UnclearedForWindow   (check remaining notifications for this window)
       │       └─ if none remain ──► tmux window-status-style unset
       │                          ──► tmux window-status-current-style unset
-      │                          ──► select-pane -P ""   (clears pane pop, pane-scoped)
+      │                          ──► set-option -p -u window-style  (clears pane pop, pane-scoped)
       │       └─ if siblings remain → window styles preserved
       ├──► UnregisterClearHook
-      ├──► SelectWindow               (outer session jumps to that window; no-op if pane gone)
+      ├──► SelectPane                 (makes the notified pane active in its window)
+      ├──► SelectWindow               (outer session switches to that window)
       └──► DetachIfShpell             (closes grimoire popup)
 ```
 
@@ -165,14 +177,47 @@ tmux-claude-notify.tmux       TPM entry point (bash, thin)
 bin/claude-notify              compiled binary (gitignored)
 cmd/claude-notify/main.go      binary entry point + subcommand routing
 internal/
-  store/store.go               JSONL log: Append, ReadAll, ClearPane, HasUnclearedPane, UpdateStatus, WindowForPane, UnclearedForWindow
+  store/store.go               notifications.jsonl: Append, ReadAll, ClearPane, HasUnclearedPane, UpdateStatus, WindowForPane, UnclearedForWindow
+  sessions/sessions.go         sessions.jsonl: SessionRecord, Upsert, ReadAll, SetPinned, Compact, DiscoverAll, RecoverPath
   tmux/tmux.go                 tmux command helpers
   setup/setup.go               ~/.claude/settings.json hook check + auto-configure
-  watcher/watcher.go           transcript file watcher: state derivation, pane correlation
-  ui/model.go                  bubbletea dashboard TUI (embeds transcript watcher)
+  watcher/watcher.go           transcript file watcher: state derivation, pane correlation, sessions.Upsert on discovery
+  ui/model.go                  bubbletea dashboard TUI: Notifications + Sessions views, tab toggle, sort/filter/pin/resume
 Taskfile.yml                   build / dev / test / lint / setup tasks
 architecture.md                this file (update with every change)
 DEVELOPMENT.md                 ordered development items
+```
+
+## Data Flow: Session Index
+
+```
+ Watcher discovers active claude pane
+      │
+      ▼
+ sessions.Upsert(SessionRecord)      ~/.local/share/tmux-claude-notify/sessions.jsonl
+   {session_id, encoded_path, project_path (real), pane_id, window_id,
+    window_name, tmux_session, last_activity, status}
+      │
+      ├─ Pinned flag always preserved (never overwritten by watcher)
+      └─ On Reconcile: clearInactivePaneSessions clears pane_id/window fields
+         for sessions whose pane is no longer in tmux list-panes
+
+ Dashboard opens → Sessions view activated
+      │
+      ├─ sessions.ReadAll()      → known sessions from sessions.jsonl (sorted: pinned first, then newest)
+      ├─ sessions.DiscoverAll()  → filesystem scan ~/.claude/projects/*/*.jsonl
+      │   └─ merge: new UUIDs not yet in sessions.jsonl added to view
+      └─ sessions.RecoverPath(encodedPath, stored)
+          1. return stored project_path if non-empty (exact, from active-pane discovery)
+          2. BFS filesystem walk: split encoded on "-", try combining segments as dir components
+          3. fallback: replace leading "-" with "/" and treat all "-" as "/"
+
+ User pins session (p key)
+      └─► sessions.SetPinned(sessionID, pinned)  → atomic JSONL rewrite
+
+ User resumes closed session (r key in Sessions view)
+      └─► sessions.RecoverPath → tmux neww -c <path> -- claude --resume <session_id>
+          └─► DetachIfShpell (close popup)
 ```
 
 ## Key Design Decisions
@@ -184,7 +229,7 @@ DEVELOPMENT.md                 ordered development items
 | TUI | bubbletea + lipgloss | no fzf runtime dependency, full color control |
 | Keybinding | TPM option `@claude-notify-key` | user-overridable, standard TPM convention |
 | Hook install | auto-write if missing, read-only check otherwise | friction of manual setup outweighs risk of touching user file |
-| Pane pop | `select-pane -P bg=<color>` (pane-scoped) | targets the specific notified pane regardless of focus; `window-active-style` applied to the wrong pane when user was focused elsewhere |
+| Pane pop | `set-option -p window-style bg=<color>` (pane-scoped) | targets the specific notified pane without selecting it; `select-pane -P` moves user cursor focus as a side effect in tmux 3.7b |
 | Pop color | `@claude-notify-pop-color` → `@tmux-pop-color` → `#1e1e2e` fallback | visible on black terminal; compatible with Catppuccin Mocha |
 | Dashboard keybinding | grimoire shpell if present, `display-popup` fallback | grimoire provides native toggle (C-M-p again to close); popup requires explicit q/esc |
 | Dashboard selection | stay open until list empty, then DetachIfShpell | allows handling multiple pending notifications in one session |
@@ -197,3 +242,7 @@ DEVELOPMENT.md                 ordered development items
 | Transcript watcher | embedded in dashboard TUI, not daemon | no IPC complexity, lifecycle tied to TUI, TPM entry point unchanged |
 | Pane correlation | forward encode `pane_current_path` → lookup project dir | unambiguous; naive decode fails for paths with hyphens/dots |
 | Stale threshold | `@claude-notify-stale-minutes` TPM option (default 5) | user-tunable without recompile |
+| Session index | separate `sessions.jsonl` (not added to `notifications.jsonl`) | different lifecycle: sessions are permanent records; notifications are ephemeral; commingling breaks HasUnclearedPane idempotency |
+| Path recovery | three-tier (stored → BFS walk → naive decode) | forward encoding is lossy (`/` and `.` → `-`); stored path (from active-pane discovery) is exact; BFS resolves most real-world ambiguity; naive decode is last resort |
+| Session discovery | `DiscoverAll()` only on Sessions view activation, not on every state change | filesystem scan of all ~/.claude/projects can be slow with many sessions; known sessions reload from JSONL on every state change (fast) |
+| Session view filter | active-pane filter always shows pinned sessions | pinned = "always visible"; hiding pinned behind filter defeats the purpose |

@@ -6,39 +6,34 @@ When a Claude notification fires on the currently focused pane (the user is alre
 
 ## Requirements
 
-### Requirement: Auto-reset fires when notified pane is currently focused
-When `claude-notify notify` is invoked and the notified pane is both (a) the active pane in its window and (b) in the currently active window, the binary SHALL fork a detached subprocess (`claude-notify auto-reset --pane <id> --delay <N>`) immediately after applying the visual pop, then exit. The subprocess sleeps N seconds (from `@claude-notify-active-reset-seconds`, default `15`) and then clears the notification. If `@claude-notify-active-reset-seconds` is `0`, the auto-reset is disabled and the notification persists as normal.
+### Requirement: Auto-reset fires when the notified pane's window is currently active
+When `claude-notify notify` is invoked and the window containing the notified pane is the user's currently active window, the binary SHALL fork a detached subprocess (`claude-notify auto-reset --pane <id> --delay <N>`) immediately after applying the visual pop, then exit. The subprocess sleeps N seconds (from `@claude-notify-active-reset-seconds`, default `15`) and then clears the notification. If `@claude-notify-active-reset-seconds` is `0`, the auto-reset is disabled and the notification persists as normal. The check uses `window_active` only — not `pane_active` — so auto-reset fires even when the user is focused on a different split pane in the same window.
 
-#### Scenario: Active pane and active window — auto-reset subprocess spawned
+#### Scenario: Active window — auto-reset subprocess spawned
 - **WHEN** `claude-notify notify` is invoked
-- **AND** `tmux display-message -t $TMUX_PANE -p "#{pane_active}#{window_active}"` returns `11`
+- **AND** `tmux display-message -t $TMUX_PANE -p "#{window_active}"` returns `1`
 - **THEN** a detached `claude-notify auto-reset --pane <id> --delay <N>` subprocess is started
 - **AND** the notify command exits immediately without blocking
 
-#### Scenario: Active pane but inactive window — no auto-reset
+#### Scenario: Inactive window — no auto-reset
 - **WHEN** `claude-notify notify` is invoked
-- **AND** the pane is active in its window but the window is not the current window (`window_active = 0`)
+- **AND** the window containing the notified pane is not the user's current window (`window_active = 0`)
 - **THEN** no auto-reset subprocess is spawned
 - **AND** the notification persists until manually dismissed
-
-#### Scenario: Inactive pane — no auto-reset
-- **WHEN** `claude-notify notify` is invoked
-- **AND** `pane_active` is `0`
-- **THEN** no auto-reset subprocess is spawned
 
 #### Scenario: Auto-reset disabled via option — no subprocess
 - **WHEN** `@claude-notify-active-reset-seconds` is set to `0`
 - **THEN** no auto-reset subprocess is spawned regardless of pane focus state
 
 ### Requirement: Auto-reset subprocess clears notification after delay
-The `claude-notify auto-reset` subcommand SHALL sleep for the specified delay, then check two conditions before clearing: (1) the JSONL entry for the given pane is still uncleared, and (2) the dashboard popup (`_shpell-session`) is NOT currently open. If either check fails, the subprocess exits without modifying the store or tmux styles. If both conditions are met, it SHALL call `ClearPane` on the store, then call `store.UnclearedForWindow(windowID)` — only if that returns empty SHALL it unset `window-status-style` and `window-status-current-style` on the window. The pane background pop SHALL always be cleared per-pane via `select-pane -t <paneID> -P ""` regardless of sibling notifications.
+The `claude-notify auto-reset` subcommand SHALL sleep for the specified delay, then check two conditions before clearing: (1) the JSONL entry for the given pane is still uncleared, and (2) the dashboard popup (`_shpell-session`) is NOT currently open. If either check fails, the subprocess exits without modifying the store or tmux styles. If both conditions are met, it SHALL call `ClearPane` on the store, then call `store.UnclearedForWindow(windowID)` — only if that returns empty SHALL it unset `window-status-style` and `window-status-current-style` on the window. The pane background pop SHALL always be cleared per-pane via `set-option -t <paneID> -p -u window-style` regardless of sibling notifications.
 
 #### Scenario: Entry still uncleared and popup closed — cleared automatically
 - **WHEN** the auto-reset subprocess wakes after N seconds
 - **AND** the store still has an uncleared entry for the pane
 - **AND** `tmux.IsShpellOpen()` returns `false`
 - **THEN** `ClearPane` is called, removing the JSONL entry
-- **AND** `select-pane -t <paneID> -P ""` is called to clear the pane background pop
+- **AND** `set-option -t <paneID> -p -u window-style` is called to clear the pane background pop
 - **AND** if no other uncleared entries remain for the same window, `window-status-style` and `window-status-current-style` are unset via `set-option -u`
 - **AND** if sibling panes in the same window still have uncleared entries, window tab styles are NOT cleared
 

@@ -3,7 +3,10 @@ package ui
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,7 +14,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/fsnotify/fsnotify"
+	"github.com/mattn/go-runewidth"
 
+	"github.com/bradfordwagner/tmux-claude-notify/internal/sessions"
 	"github.com/bradfordwagner/tmux-claude-notify/internal/setup"
 	"github.com/bradfordwagner/tmux-claude-notify/internal/store"
 	tmuxclient "github.com/bradfordwagner/tmux-claude-notify/internal/tmux"
@@ -36,7 +41,29 @@ var (
 		"waiting": lipgloss.NewStyle().Foreground(accent),
 		"running": lipgloss.NewStyle().Foreground(warnColor),
 		"stale":   lipgloss.NewStyle().Foreground(subtle),
+		"idle":    lipgloss.NewStyle().Foreground(subtle),
 	}
+
+	statusIcons = map[string]string{
+		"waiting": "⏳",
+		"running": "⚙ ",
+		"stale":   "💤",
+		"idle":    "💤",
+	}
+)
+
+type viewMode int
+
+const (
+	viewNotifications viewMode = iota
+	viewSessions
+)
+
+type sortField int
+
+const (
+	sortAge sortField = iota
+	sortStatus
 )
 
 type (
@@ -44,21 +71,46 @@ type (
 	notificationsChangedMsg struct{}
 )
 
+// entry is a row in the Notifications view.
 type entry struct {
-	record store.Record
-	Path   string
+	record         store.Record
+	Path           string
+	pinned         bool   // true if backed by a pinned sessions record
+	sessionID      string // set when backed by sessions.jsonl (enables pin toggle)
+	isSessionEntry bool   // true = came from sessions.jsonl, not notifications.jsonl
+}
+
+// sessionEntry is a row in the Sessions view.
+type sessionEntry struct {
+	record   sessions.SessionRecord
+	projPath string // trimmed display path
+}
+
+// projRow is a Level-1 row in the Sessions table (one per project).
+type projRow struct {
+	key          string // "📌 Pinned" or trimmed projPath
+	count        int
+	lastActivity int64
+	bestStatus   string
 }
 
 type model struct {
-	entries           []entry
-	cursor            int
-	setupResult       setup.Result
-	setupMessage      string
-	toast             string
-	toastTimer        timer.Model
-	watcher           *fsnotify.Watcher
+	entries      []entry
+	cursor       int
+	setupResult  setup.Result
+	setupMessage string
+	toast        string
+	toastIsError bool
+	toastTimer   timer.Model
+	watcher      *fsnotify.Watcher
 	transcriptWatcher *watcher.Watcher
-	quitting          bool
+	quitting     bool
+
+	activeView   viewMode
+	sessionItems []sessionEntry
+	drillProject string // "" = projects table (Level 1); non-empty = sessions for this project (Level 2)
+	sortBy       sortField
+	filterActive bool
 }
 
 func newModel() (model, error) {
@@ -86,9 +138,11 @@ func newModel() (model, error) {
 		m.toast = m.setupMessage
 		m.toastTimer = timer.NewWithInterval(10*time.Second, time.Second)
 	}
+
+	_ = sessions.Compact(90 * 24 * time.Hour)
+
 	m.entries = loadEntries()
 
-	// Reconcile store against live transcript state before first render.
 	for _, sc := range tw.Reconcile() {
 		applyStateChange(sc)
 	}
@@ -106,12 +160,21 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
+	defer func() {
+		if r := recover(); r != nil {
+			buf := make([]byte, 4096)
+			n := runtime.Stack(buf, false)
+			_ = os.WriteFile("/tmp/cn-crash.log", append([]byte(fmt.Sprintf("panic: %v\n\n", r)), buf[:n]...), 0o644)
+			panic(r)
+		}
+	}()
 	switch msg := msg.(type) {
 	case settingsChangedMsg:
 		m.setupResult, m.setupMessage = checkAndConfigure()
 		if m.setupMessage != "" {
 			m.toast = m.setupMessage
+			m.toastIsError = false
 			m.toastTimer = timer.NewWithInterval(10*time.Second, time.Second)
 			return m, tea.Batch(watchCmd(m.watcher), m.toastTimer.Init())
 		}
@@ -129,103 +192,433 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case notificationsChangedMsg:
 		m.entries = loadEntries()
-		if m.cursor >= len(m.entries) {
-			m.cursor = max(0, len(m.entries)-1)
+		if m.activeView == viewSessions {
+			m.sessionItems = loadSessionEntries(m.sortBy, m.filterActive)
 		}
+		m.clampCursor()
 		return m, watchCmd(m.watcher)
 
 	case watcher.StateChange:
 		applyStateChange(msg)
 		m.entries = loadEntries()
-		if m.cursor >= len(m.entries) {
-			m.cursor = max(0, len(m.entries)-1)
+		for i, si := range m.sessionItems {
+			if si.record.PaneID == msg.PaneID {
+				m.sessionItems[i].record.Status = string(msg.Status)
+				break
+			}
 		}
+		m.clampCursor()
 		return m, watcherCmd(m.transcriptWatcher)
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "q", "esc", "ctrl+c":
+		case "q", "ctrl+c":
 			m.watcher.Close()
 			m.transcriptWatcher.Close()
 			m.quitting = true
 			return m, tea.Quit
+
+		case "esc":
+			if m.activeView == viewSessions && m.drillProject != "" {
+				m.drillProject = ""
+				m.cursor = 0
+			} else {
+				m.watcher.Close()
+				m.transcriptWatcher.Close()
+				m.quitting = true
+				return m, tea.Quit
+			}
+
+		case "tab":
+			if m.activeView == viewNotifications {
+				m.activeView = viewSessions
+				m.cursor = 0
+				m.drillProject = ""
+				m.sessionItems = loadSessionEntries(m.sortBy, m.filterActive)
+			} else {
+				m.activeView = viewNotifications
+				m.cursor = 0
+				m.drillProject = ""
+			}
+
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
 			}
+
 		case "down", "j":
-			if m.cursor < len(m.entries)-1 {
+			maxIdx := m.sessionListLen() - 1
+			if m.activeView == viewNotifications {
+				maxIdx = len(m.entries) - 1
+			}
+			if m.cursor < maxIdx {
 				m.cursor++
 			}
-		case "enter":
-			if len(m.entries) > 0 {
-				selected := m.entries[m.cursor]
-				paneID := selected.record.Pane
-				windowID := selected.record.Window
-				_ = tmuxclient.ClearPopStyle(paneID)
-				_ = tmuxclient.UnregisterClearHook(paneID)
-				_ = store.ClearPane(paneID)
-				remaining, _ := store.UnclearedForWindow(windowID)
-				if len(remaining) == 0 {
-					_ = tmuxclient.ClearWindowStyle(windowID)
+
+		case "s":
+			if m.activeView == viewSessions {
+				m.sortBy = (m.sortBy + 1) % 2
+				m.sessionItems = loadSessionEntries(m.sortBy, m.filterActive)
+				m.clampCursor()
+			}
+
+		case "f":
+			if m.activeView == viewSessions {
+				m.filterActive = !m.filterActive
+				m.sessionItems = loadSessionEntries(m.sortBy, m.filterActive)
+				m.cursor = 0
+			}
+
+		case "p":
+			switch m.activeView {
+			case viewSessions:
+				if m.drillProject != "" {
+					drilled := m.sessionsForDrill()
+					if len(drilled) > 0 && m.cursor < len(drilled) {
+						si := drilled[m.cursor]
+						if err := sessions.SetPinned(si.record.SessionID, !si.record.Pinned); err == nil {
+							m.sessionItems = loadSessionEntries(m.sortBy, m.filterActive)
+							m.entries = loadEntries()
+							m.clampCursor()
+						}
+					}
 				}
-				_ = tmuxclient.SelectWindow(selected.record.Session, windowID)
-				m.entries = loadEntries()
-				if m.cursor >= len(m.entries) {
-					m.cursor = max(0, len(m.entries)-1)
+			case viewNotifications:
+				if len(m.entries) > 0 {
+					e := m.entries[m.cursor]
+					if e.sessionID != "" {
+						if err := sessions.SetPinned(e.sessionID, !e.pinned); err == nil {
+							m.entries = loadEntries()
+							m.sessionItems = loadSessionEntries(m.sortBy, m.filterActive)
+							m.clampCursor()
+						}
+					}
 				}
-				_ = tmuxclient.DetachIfShpell()
+			}
+
+		case "r":
+			if m.activeView == viewSessions && m.drillProject != "" {
+				drilled := m.sessionsForDrill()
+				if len(drilled) > 0 && m.cursor < len(drilled) {
+					si := drilled[m.cursor]
+					if si.record.PaneID != "" {
+						_ = tmuxclient.SelectPane(si.record.PaneID)
+						_ = tmuxclient.SelectWindow(si.record.TmuxSession, si.record.WindowID)
+						_ = tmuxclient.DetachIfShpell()
+					} else {
+						return m.doResume(si)
+					}
+				}
+			}
+
+		case "enter", " ":
+			switch m.activeView {
+			case viewNotifications:
+				if len(m.entries) > 0 {
+					selected := m.entries[m.cursor]
+					if selected.isSessionEntry && selected.record.Pane == "" {
+						m.toast = "No active pane — switch to Sessions tab to resume"
+						m.toastIsError = false
+						m.toastTimer = timer.NewWithInterval(5*time.Second, time.Second)
+						return m, m.toastTimer.Init()
+					}
+					paneID := selected.record.Pane
+					windowID := selected.record.Window
+					if !selected.isSessionEntry {
+						_ = tmuxclient.ClearPopStyle(paneID)
+						_ = tmuxclient.UnregisterClearHook(paneID)
+						_ = store.ClearPane(paneID)
+						remaining, _ := store.UnclearedForWindow(windowID)
+						if len(remaining) == 0 {
+							_ = tmuxclient.ClearWindowStyle(windowID)
+						}
+					}
+					_ = tmuxclient.SelectPane(paneID)
+					_ = tmuxclient.SelectWindow(selected.record.Session, windowID)
+					m.entries = loadEntries()
+					m.clampCursor()
+					_ = tmuxclient.DetachIfShpell()
+				}
+			case viewSessions:
+				if m.drillProject == "" {
+					rows := buildProjRows(m.sessionItems)
+					if len(rows) > 0 && m.cursor < len(rows) {
+						m.drillProject = rows[m.cursor].key
+						m.cursor = 0
+					}
+				} else {
+					drilled := m.sessionsForDrill()
+					if len(drilled) > 0 && m.cursor < len(drilled) {
+						si := drilled[m.cursor]
+						if si.record.PaneID != "" {
+							_ = tmuxclient.SelectPane(si.record.PaneID)
+							_ = tmuxclient.SelectWindow(si.record.TmuxSession, si.record.WindowID)
+							_ = tmuxclient.DetachIfShpell()
+						} else {
+							return m.doResume(si)
+						}
+					}
+				}
 			}
 		}
 	}
 	return m, nil
 }
 
+// doResume executes tmux neww to reopen a closed session.
+func (m model) doResume(si sessionEntry) (tea.Model, tea.Cmd) {
+	if !tmuxclient.InTmux() {
+		m.toast = "Cannot resume: not in tmux"
+		m.toastIsError = true
+		m.toastTimer = timer.NewWithInterval(5*time.Second, time.Second)
+		return m, m.toastTimer.Init()
+	}
+	projPath := sessions.RecoverPath(si.record.EncodedPath, si.record.ProjectPath)
+	if projPath == "" {
+		m.toast = "Cannot resume: project path unknown"
+		m.toastIsError = true
+		m.toastTimer = timer.NewWithInterval(5*time.Second, time.Second)
+		return m, m.toastTimer.Init()
+	}
+	cmd := exec.Command("tmux", "neww", "-c", projPath, "--", "claude", "--resume", si.record.SessionID)
+	_ = cmd.Start()
+	if cmd.Process != nil {
+		_ = cmd.Process.Release()
+	}
+	_ = tmuxclient.DetachIfShpell()
+	return m, nil
+}
+
+func (m *model) clampCursor() {
+	listLen := m.sessionListLen()
+	if m.activeView == viewNotifications {
+		listLen = len(m.entries)
+	}
+	if m.cursor >= listLen {
+		m.cursor = max(0, listLen-1)
+	}
+}
+
+func (m model) sessionListLen() int {
+	if m.drillProject != "" {
+		return len(m.sessionsForDrill())
+	}
+	return len(buildProjRows(m.sessionItems))
+}
+
+func (m model) sessionsForDrill() []sessionEntry {
+	var result []sessionEntry
+	for _, e := range m.sessionItems {
+		if groupKeyFor(e) == m.drillProject {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+func groupKeyFor(e sessionEntry) string {
+	if e.record.Pinned {
+		return "📌 Pinned"
+	}
+	if e.projPath != "" {
+		return e.projPath
+	}
+	return "(unknown)"
+}
+
+// buildProjRows computes Level-1 project rows from the flat session list.
+func buildProjRows(items []sessionEntry) []projRow {
+	var order []string
+	type acc struct {
+		count        int
+		lastActivity int64
+		bestStatus   string
+	}
+	seen := make(map[string]*acc)
+	for _, e := range items {
+		key := groupKeyFor(e)
+		if _, ok := seen[key]; !ok {
+			seen[key] = &acc{bestStatus: "idle"}
+			order = append(order, key)
+		}
+		a := seen[key]
+		a.count++
+		if e.record.LastActivity > a.lastActivity {
+			a.lastActivity = e.record.LastActivity
+		}
+		if statusPriority(e.record.Status) < statusPriority(a.bestStatus) {
+			a.bestStatus = e.record.Status
+		}
+	}
+	rows := make([]projRow, 0, len(order))
+	for _, k := range order {
+		a := seen[k]
+		rows = append(rows, projRow{key: k, count: a.count, lastActivity: a.lastActivity, bestStatus: a.bestStatus})
+	}
+	return rows
+}
+
 func (m model) View() string {
 	if m.quitting {
 		return ""
 	}
-
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("claude-notify") + "\n")
-	if status := m.renderSetupStatus(); status != "" {
-		b.WriteString(status + "\n")
+	b.WriteString(m.renderTabHeader() + "\n")
+	if m.activeView == viewNotifications {
+		if status := m.renderSetupStatus(); status != "" {
+			b.WriteString(status + "\n")
+		}
 	}
 	if m.toast != "" {
-		b.WriteString(statusOK.Render("✓ "+m.toast) + "\n")
+		style := statusOK
+		prefix := "✓ "
+		if m.toastIsError {
+			style = statusWarn
+			prefix = "⚠ "
+		}
+		b.WriteString(style.Render(prefix+m.toast) + "\n")
 	}
 	b.WriteString("\n")
+	switch m.activeView {
+	case viewNotifications:
+		b.WriteString(m.renderNotificationsView())
+	case viewSessions:
+		b.WriteString(m.renderSessionsView())
+	}
+	return b.String()
+}
 
+func (m model) renderTabHeader() string {
+	notifLabel := " Notifications "
+	sessLabel := " Sessions "
+	switch m.activeView {
+	case viewNotifications:
+		active := titleStyle.Render("[" + notifLabel + "]")
+		inactive := dimStyle.Render("  " + strings.TrimSpace(sessLabel) + "  ")
+		return active + inactive
+	default: // viewSessions
+		inactive := dimStyle.Render("  " + strings.TrimSpace(notifLabel) + "  ")
+		active := titleStyle.Render("[" + sessLabel + "]")
+		sortNames := []string{"age", "status"}
+		extra := dimStyle.Render("   sort: " + sortNames[m.sortBy])
+		if m.filterActive {
+			extra += dimStyle.Render("  filter: active panes")
+		}
+		if m.drillProject != "" {
+			extra += dimStyle.Render("  esc: back")
+		}
+		return inactive + active + extra
+	}
+}
+
+func (m model) renderNotificationsView() string {
+	var b strings.Builder
 	if len(m.entries) == 0 {
 		b.WriteString(dimStyle.Render("No pending notifications.") + "\n")
 	} else {
-		header := fmt.Sprintf("  %-12s  %-20s  %-25s  %-14s  %s",
-			"STATUS", "WINDOW", "PATH", "SESSION", "AGE")
+		header := fmt.Sprintf("  %-12s  %-3s  %-20s  %-25s  %-14s  %s",
+			"STATUS", "PIN", "WINDOW", "PATH", "SESSION", "AGE")
 		b.WriteString(dimStyle.Render(header) + "\n")
-		b.WriteString(dimStyle.Render("  " + strings.Repeat("─", 82)) + "\n")
+		b.WriteString(dimStyle.Render("  "+strings.Repeat("─", 88)) + "\n")
 		for i, e := range m.entries {
 			r := e.record
 			statusBadge := renderStatusBadge(r.Status)
-			line := fmt.Sprintf("%s  %-20s  %-25s  %-14s  %s",
-				statusBadge, r.WindowName, e.Path, r.Session, formatAge(r.TS))
+			pinCol := "   "
+			if e.pinned {
+				pinCol = "📌 "
+			}
+			// Truncate path to 25 visual columns to prevent column overflow.
+			path := runewidth.Truncate(e.Path, 25, "…")
+			path = runewidth.FillRight(path, 25)
+			line := fmt.Sprintf("%s  %s  %-20s  %s  %-14s  %s",
+				statusBadge, pinCol, r.WindowName, path, r.Session, formatAge(r.TS))
 			if i == m.cursor {
 				b.WriteString(selectedStyle.Render("> ") + line + "\n")
 			} else {
 				b.WriteString("  " + normalStyle.Render(line) + "\n")
 			}
 		}
-		b.WriteString("\n" + dimStyle.Render("↑/↓ or j/k to move  •  enter to switch  •  q to quit") + "\n")
+		b.WriteString("\n" + dimStyle.Render("↑/↓ j/k  •  enter: focus  •  p: pin  •  tab: Sessions  •  q: quit") + "\n")
 	}
-
 	return b.String()
 }
 
-var statusIcons = map[string]string{
-	"waiting": "⏳",
-	"running": "⚙ ",
-	"stale":   "💤",
+func (m model) renderSessionsView() string {
+	var b strings.Builder
+
+	if m.drillProject == "" {
+		// ── Level 1: projects table ──────────────────────────────────────────
+		rows := buildProjRows(m.sessionItems)
+		if len(rows) == 0 {
+			msg := "No sessions discovered."
+			if m.filterActive {
+				msg = "No active sessions."
+			}
+			b.WriteString(dimStyle.Render(msg) + "\n")
+			return b.String()
+		}
+		header := fmt.Sprintf("  %-12s  %-32s  %5s  %s", "STATUS", "PROJECT", "COUNT", "LAST USED")
+		b.WriteString(dimStyle.Render(header) + "\n")
+		b.WriteString(dimStyle.Render("  "+strings.Repeat("─", 65)) + "\n")
+		for i, row := range rows {
+			status := row.bestStatus
+			if status == "" {
+				status = "idle"
+			}
+			badge := renderStatusBadge(status)
+			proj := runewidth.Truncate(row.key, 32, "…")
+			proj = runewidth.FillRight(proj, 32)
+			line := fmt.Sprintf("%s  %s  %5d  %s", badge, proj, row.count, formatAge(row.lastActivity))
+			if i == m.cursor {
+				b.WriteString(selectedStyle.Render("> ") + line + "\n")
+			} else {
+				b.WriteString("  " + normalStyle.Render(line) + "\n")
+			}
+		}
+		b.WriteString("\n" + dimStyle.Render("↑/↓ j/k  •  enter: open  •  s: sort  •  f: filter  •  tab: Notifications  •  q: quit") + "\n")
+		return b.String()
+	}
+
+	// ── Level 2: sessions for drillProject ───────────────────────────────────
+	b.WriteString(titleStyle.Render("  ← "+m.drillProject) + "\n")
+	b.WriteString(dimStyle.Render("  "+strings.Repeat("─", min(runewidth.StringWidth(m.drillProject)+4, 50))) + "\n")
+
+	drilled := m.sessionsForDrill()
+	if len(drilled) == 0 {
+		b.WriteString(dimStyle.Render("  No sessions.") + "\n")
+	} else {
+		header := fmt.Sprintf("  %-12s  %-3s  %-10s  %s", "STATUS", "PIN", "SESSION", "AGE")
+		b.WriteString(dimStyle.Render(header) + "\n")
+		b.WriteString(dimStyle.Render("  "+strings.Repeat("─", 44)) + "\n")
+		for i, e := range drilled {
+			r := e.record
+			status := r.Status
+			if status == "" {
+				status = "idle"
+			}
+			badge := renderStatusBadge(status)
+			pinCol := "   "
+			if r.Pinned {
+				pinCol = "📌 "
+			}
+			sid := r.SessionID
+			if len(sid) > 8 {
+				sid = sid[:8]
+			}
+			line := fmt.Sprintf("%s  %s  %-10s  %s", badge, pinCol, sid, formatAge(r.LastActivity))
+			if i == m.cursor {
+				b.WriteString(selectedStyle.Render("> ") + line + "\n")
+			} else {
+				b.WriteString("  " + normalStyle.Render(line) + "\n")
+			}
+		}
+	}
+	b.WriteString("\n" + dimStyle.Render("↑/↓ j/k  •  enter/r: resume  •  p: pin  •  esc: back  •  tab: Notifications  •  q: quit") + "\n")
+	return b.String()
 }
 
+// renderStatusBadge renders a status string with its icon, padded to a fixed
+// visual width using runewidth so emoji-width differences don't misalign columns.
 func renderStatusBadge(status string) string {
 	if status == "" {
 		status = "waiting"
@@ -234,10 +627,17 @@ func renderStatusBadge(status string) string {
 	if !ok {
 		style = dimStyle
 	}
-	icon := statusIcons[status]
-	// Pad plain text before applying color so ANSI codes don't skew column widths.
-	padded := fmt.Sprintf("%-10s", icon+" "+status)
-	return style.Render(padded)
+	icon, ok := statusIcons[status]
+	if !ok {
+		icon = "  "
+	}
+	text := icon + " " + status
+	const targetWidth = 12
+	w := runewidth.StringWidth(text)
+	if w < targetWidth {
+		text += strings.Repeat(" ", targetWidth-w)
+	}
+	return style.Render(text)
 }
 
 func (m model) renderSetupStatus() string {
@@ -251,7 +651,6 @@ func (m model) renderSetupStatus() string {
 	}
 }
 
-// watchCmd blocks on the fsnotify watcher and dispatches message type by file.
 func watchCmd(fw *fsnotify.Watcher) tea.Cmd {
 	settingsFile := filepath.Base(setup.SettingsPath())
 	logFile := filepath.Base(store.LogPath())
@@ -277,7 +676,6 @@ func watchCmd(fw *fsnotify.Watcher) tea.Cmd {
 	}
 }
 
-// watcherCmd waits for the next transcript StateChange and returns it as a tea.Msg.
 func watcherCmd(tw *watcher.Watcher) tea.Cmd {
 	return func() tea.Msg {
 		sc, ok := <-tw.Changes()
@@ -288,7 +686,6 @@ func watcherCmd(tw *watcher.Watcher) tea.Cmd {
 	}
 }
 
-// applyStateChange updates the JSONL store and tmux styles for a watcher event.
 func applyStateChange(sc watcher.StateChange) {
 	if sc.Clear {
 		_ = tmuxclient.ClearPopStyle(sc.PaneID)
@@ -339,25 +736,219 @@ func loadEntries() []entry {
 	for _, p := range livePanes {
 		liveSet[p] = true
 	}
-	// Deduplicate: show only the most recent uncleared record per pane.
-	// Duplicates can arise from a race between the Stop hook subprocess and the
-	// watcher goroutine both appending before either's HasUnclearedPane check
-	// sees the other's write.
-	home, _ := os.UserHomeDir()
-	seen := make(map[string]bool)
-	var entries []entry
-	for _, r := range records { // records already sorted newest-first
-		if !r.Cleared && !seen[r.Pane] {
-			seen[r.Pane] = true
-			p, _ := tmuxclient.PanePath(r.Pane)
-			path := trimPath(p, home)
-			if path == "" && !liveSet[r.Pane] {
-				path = "(gone)"
-			}
-			entries = append(entries, entry{record: r, Path: path})
+
+	sessRecords, _ := sessions.ReadAll()
+	paneToSession := make(map[string]sessions.SessionRecord)
+	for _, sr := range sessRecords {
+		if sr.PaneID != "" {
+			paneToSession[sr.PaneID] = sr
 		}
 	}
-	return entries
+
+	home, _ := os.UserHomeDir()
+	seenPane := make(map[string]bool)
+	seenSession := make(map[string]bool)
+
+	var notifPinned []entry
+	var notifNormal []entry
+	for _, r := range records {
+		if r.Cleared || seenPane[r.Pane] {
+			continue
+		}
+		seenPane[r.Pane] = true
+		p, _ := tmuxclient.PanePath(r.Pane)
+		path := trimPath(p, home)
+		if path == "" && !liveSet[r.Pane] {
+			path = "(gone)"
+		}
+		pinned := false
+		sid := ""
+		if sr, ok := paneToSession[r.Pane]; ok {
+			pinned = sr.Pinned
+			sid = sr.SessionID
+			seenSession[sr.SessionID] = true
+		}
+		e := entry{record: r, Path: path, pinned: pinned, sessionID: sid}
+		if pinned {
+			notifPinned = append(notifPinned, e)
+		} else {
+			notifNormal = append(notifNormal, e)
+		}
+	}
+
+	var sessActivePinned []entry
+	var sessActiveNormal []entry
+	var sessIdlePinned []entry
+
+	for _, sr := range sessRecords {
+		if seenSession[sr.SessionID] {
+			continue
+		}
+		if sr.PaneID != "" && seenPane[sr.PaneID] {
+			continue
+		}
+		if sr.PaneID == "" && !sr.Pinned {
+			continue
+		}
+
+		seenSession[sr.SessionID] = true
+		if sr.PaneID != "" {
+			seenPane[sr.PaneID] = true
+		}
+
+		status := sr.Status
+		if status == "" {
+			status = "idle"
+		}
+		path := trimPath(sr.ProjectPath, home)
+		if path == "" {
+			recovered := sessions.RecoverPath(sr.EncodedPath, "")
+			path = trimPath(recovered, home)
+		}
+		if path == "" {
+			path = "(unknown)"
+		}
+
+		e := entry{
+			record: store.Record{
+				TS:         sr.LastActivity,
+				Pane:       sr.PaneID,
+				Window:     sr.WindowID,
+				WindowName: sr.WindowName,
+				Session:    sr.TmuxSession,
+				Status:     status,
+			},
+			Path:           path,
+			pinned:         sr.Pinned,
+			sessionID:      sr.SessionID,
+			isSessionEntry: true,
+		}
+
+		switch {
+		case sr.Pinned && sr.PaneID != "":
+			sessActivePinned = append(sessActivePinned, e)
+		case sr.Pinned && sr.PaneID == "":
+			sessIdlePinned = append(sessIdlePinned, e)
+		default:
+			sessActiveNormal = append(sessActiveNormal, e)
+		}
+	}
+
+	var result []entry
+	result = append(result, notifPinned...)
+	result = append(result, sessActivePinned...)
+	result = append(result, sessIdlePinned...)
+	result = append(result, notifNormal...)
+	result = append(result, sessActiveNormal...)
+	return result
+}
+
+func loadSessionEntries(by sortField, filterActive bool) []sessionEntry {
+	known, _ := sessions.ReadAll()
+
+	discovered, _ := sessions.DiscoverAll()
+	knownIDs := make(map[string]bool, len(known))
+	for _, r := range known {
+		knownIDs[r.SessionID] = true
+	}
+	for _, d := range discovered {
+		if !knownIDs[d.SessionID] {
+			known = append(known, d)
+		}
+	}
+
+	if filterActive {
+		var filtered []sessions.SessionRecord
+		for _, r := range known {
+			if r.PaneID != "" || r.Pinned {
+				filtered = append(filtered, r)
+			}
+		}
+		known = filtered
+	}
+
+	home, _ := os.UserHomeDir()
+
+	entries := make([]sessionEntry, 0, len(known))
+	for _, r := range known {
+		projPath := sessions.RecoverPath(r.EncodedPath, r.ProjectPath)
+		trimmed := trimPath(projPath, home)
+		if trimmed == "" && projPath != "" {
+			trimmed = projPath
+		}
+		entries = append(entries, sessionEntry{record: r, projPath: trimmed})
+	}
+
+	less := func(a, b sessionEntry) bool {
+		switch by {
+		case sortStatus:
+			return statusPriority(a.record.Status) < statusPriority(b.record.Status)
+		default:
+			return a.record.LastActivity > b.record.LastActivity
+		}
+	}
+
+	var pinned []sessionEntry
+	unpinnedByGroup := make(map[string][]sessionEntry)
+	var groupOrder []string
+	seen := make(map[string]bool)
+	for _, e := range entries {
+		if e.record.Pinned {
+			pinned = append(pinned, e)
+		} else {
+			key := e.projPath
+			if key == "" {
+				key = "(unknown)"
+			}
+			if !seen[key] {
+				groupOrder = append(groupOrder, key)
+				seen[key] = true
+			}
+			unpinnedByGroup[key] = append(unpinnedByGroup[key], e)
+		}
+	}
+
+	sort.SliceStable(pinned, func(i, j int) bool { return less(pinned[i], pinned[j]) })
+
+	groupMaxAge := make(map[string]int64, len(groupOrder))
+	for k := range unpinnedByGroup {
+		g := unpinnedByGroup[k]
+		sort.SliceStable(g, func(i, j int) bool { return less(g[i], g[j]) })
+		unpinnedByGroup[k] = g
+		for _, e := range g {
+			if e.record.LastActivity > groupMaxAge[k] {
+				groupMaxAge[k] = e.record.LastActivity
+			}
+		}
+	}
+
+	if by == sortAge {
+		sort.SliceStable(groupOrder, func(i, j int) bool {
+			return groupMaxAge[groupOrder[i]] > groupMaxAge[groupOrder[j]]
+		})
+	} else {
+		sort.Strings(groupOrder)
+	}
+
+	result := make([]sessionEntry, 0, len(entries))
+	result = append(result, pinned...)
+	for _, k := range groupOrder {
+		result = append(result, unpinnedByGroup[k]...)
+	}
+	return result
+}
+
+func statusPriority(status string) int {
+	switch status {
+	case "waiting":
+		return 0
+	case "running":
+		return 1
+	case "stale":
+		return 2
+	default:
+		return 3
+	}
 }
 
 func trimPath(p, home string) string {
@@ -384,13 +975,6 @@ func formatAge(tsNano int64) string {
 	default:
 		return fmt.Sprintf("%dh ago", int(d.Hours()))
 	}
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func Run() error {

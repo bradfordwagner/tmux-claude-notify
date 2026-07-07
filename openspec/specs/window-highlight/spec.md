@@ -60,7 +60,7 @@ The notification SHALL persist until either (a) the user selects the entry from 
 - **THEN** `claude-notify notify` exits 0 without attempting any tmux commands
 
 ### Requirement: Pane background pops when waiting
-When `claude-notify notify` is invoked, `select-pane -t <paneID> -P bg=<color>` SHALL be called to highlight the specific pane's background. Using `select-pane -P` instead of `window-active-style` ensures only the notified pane is highlighted, not whichever pane happens to be focused when the hook fires. Color resolution order: `@claude-notify-pop-color` → `@tmux-pop-color` → `#1e1e2e` (Catppuccin Mocha base). The pop is pane-scoped and is cleared for each pane individually when its notification is dismissed — it is NOT gated on being the last notified pane in the window.
+When `claude-notify notify` is invoked, `set-option -t <paneID> -p window-style bg=<color>` SHALL be called to highlight the specific pane's background. Using `set-option -p window-style` instead of `select-pane -P` ensures the pane style is set without selecting the pane (which would move the user's cursor focus). Color resolution order: `@claude-notify-pop-color` → `@tmux-pop-color` → `#1e1e2e` (Catppuccin Mocha base). The pop is pane-scoped and is cleared for each pane individually when its notification is dismissed — it is NOT gated on being the last notified pane in the window.
 
 #### Scenario: Pop applies to the specific notified pane
 - **WHEN** `claude-notify notify` fires for pane `%5` while the user is focused on pane `%6` in the same window
@@ -80,11 +80,11 @@ When `claude-notify notify` is invoked, `select-pane -t <paneID> -P bg=<color>` 
 
 #### Scenario: Pop cleared per-pane on dashboard selection
 - **WHEN** the user selects a notification from the dashboard
-- **THEN** `select-pane -t <paneID> -P ""` is called to reset that pane's background
+- **THEN** `set-option -t <paneID> -p -u window-style` is called to reset that pane's background
 - **AND** sibling panes' backgrounds are unaffected
 
 #### Scenario: Pop error is non-fatal
-- **WHEN** `select-pane -P` fails for any reason
+- **WHEN** `set-option -p window-style` fails for any reason
 - **THEN** `claude-notify notify` continues and returns success (cosmetic only)
 
 ### Requirement: Notify is idempotent across multiple hook firings
@@ -93,7 +93,7 @@ The Stop hook fires multiple times per claude turn. The notify subcommand SHALL 
 #### Scenario: Second notify call for same pane — no duplicate entry
 - **WHEN** `claude-notify notify` is called for a pane that already has an uncleared JSONL entry
 - **THEN** no new record is appended to the JSONL file
-- **AND** `window-status-style`, `window-status-current-style`, and the pane pop (`select-pane -P`) are re-applied
+- **AND** `window-status-style`, `window-status-current-style`, and the pane pop (`set-option -p window-style`) are re-applied
 
 #### Scenario: New entry created after previous cleared
 - **WHEN** a pane's previous notification has been cleared (dashboard selection)

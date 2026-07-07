@@ -56,10 +56,10 @@ func ClearWindowStyle(windowID string) error {
 	return err
 }
 
-// SetPopStyle sets a persistent background highlight on the specific pane. Uses
-// select-pane -P so only the notified pane is highlighted, not whichever pane
-// happens to be focused when the hook fires. Reads @claude-notify-pop-color first,
-// then falls back to @tmux-pop-color, then a dark purple default.
+// SetPopStyle sets a persistent background highlight on the specific pane via
+// pane-local window-style. Uses set-option -p instead of select-pane -P to avoid
+// the side effect of selecting the target pane and moving the user's focus.
+// Color resolution: @claude-notify-pop-color → @tmux-pop-color → dark purple default.
 func SetPopStyle(paneID string) error {
 	color, _ := run("show-option", "-gqv", "@claude-notify-pop-color")
 	if color == "" {
@@ -69,12 +69,12 @@ func SetPopStyle(paneID string) error {
 		// Catppuccin Mocha base — visible against a pure-black terminal background.
 		color = "#1e1e2e"
 	}
-	_, err := run("select-pane", "-t", paneID, "-P", "bg="+color)
+	_, err := run("set-option", "-t", paneID, "-p", "window-style", "bg="+color)
 	return err
 }
 
 func ClearPopStyle(paneID string) error {
-	_, err := run("select-pane", "-t", paneID, "-P", "")
+	_, err := run("set-option", "-t", paneID, "-p", "-u", "window-style")
 	return err
 }
 
@@ -95,9 +95,15 @@ func UnregisterClearHook(paneID string) error {
 	return err
 }
 
-// SelectWindow sets the active window in a session without switching any client.
-// Use this before DetachIfShpell so the outer session is on the right window when
-// the popup closes.
+// SelectPane makes the given pane the active pane in its window. Use before
+// SelectWindow so the user lands on the right pane when the popup closes.
+func SelectPane(paneID string) error {
+	_, err := run("select-pane", "-t", paneID)
+	return err
+}
+
+// SelectWindow sets the active window in the outer session. Use before
+// DetachIfShpell so the session is on the right window when the popup closes.
 func SelectWindow(session, windowID string) error {
 	_, err := run("select-window", "-t", session+":"+windowID)
 	return err
@@ -135,11 +141,13 @@ func DetachIfShpell() error {
 	return nil
 }
 
-// IsPaneFocused returns true only when the given pane is the active pane in the
-// currently active window — i.e. the user is looking at it right now.
+// IsPaneFocused returns true when the window containing the given pane is the
+// user's currently active window. Checking window_active alone (rather than
+// also requiring pane_active) means auto-reset fires whenever the user is in
+// the same window, even if a different split pane is focused.
 func IsPaneFocused(paneID string) bool {
-	out, err := run("display-message", "-t", paneID, "-p", "#{pane_active}#{window_active}")
-	return err == nil && out == "11"
+	out, err := run("display-message", "-t", paneID, "-p", "#{window_active}")
+	return err == nil && out == "1"
 }
 
 // IsShpellOpen returns true when the grimoire shpell popup session is live,
