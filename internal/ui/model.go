@@ -1013,6 +1013,18 @@ func loadEntries() []entry {
 	result = append(result, sessIdlePinned...)
 	result = append(result, notifNormal...)
 	result = append(result, sessActiveNormal...)
+
+	// Sort: pinned first, then popped (active background highlight) first, then most recent.
+	sort.SliceStable(result, func(i, j int) bool {
+		a, b := result[i], result[j]
+		if a.pinned != b.pinned {
+			return a.pinned
+		}
+		if a.popped != b.popped {
+			return a.popped
+		}
+		return a.record.TS > b.record.TS
+	})
 	return result
 }
 
