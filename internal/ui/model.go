@@ -29,6 +29,7 @@ var (
 	okColor       = lipgloss.Color("#50FA7B")
 	warnColor     = lipgloss.Color("#FFB86C")
 	unknColor     = lipgloss.Color("#FF5555")
+	selBg         = lipgloss.Color("#313244") // Catppuccin surface0 — row selection background
 	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(accent)
 	selectedStyle = lipgloss.NewStyle().Foreground(accent).Bold(true)
 	normalStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#cdd6f4"))
@@ -105,12 +106,20 @@ type model struct {
 	watcher      *fsnotify.Watcher
 	transcriptWatcher *watcher.Watcher
 	quitting     bool
+	width        int
 
 	activeView   viewMode
 	sessionItems []sessionEntry
 	drillProject string // "" = projects table (Level 1); non-empty = sessions for this project (Level 2)
 	sortBy       sortField
 	filterActive bool
+}
+
+func (m model) termWidth() int {
+	if m.width > 0 {
+		return m.width
+	}
+	return 120
 }
 
 func newModel() (model, error) {
@@ -188,6 +197,10 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 	case timer.TimeoutMsg:
 		m.toastTimer, _ = m.toastTimer.Update(msg)
 		m.toast = ""
+		return m, nil
+
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
 		return m, nil
 
 	case notificationsChangedMsg:
@@ -296,17 +309,60 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 				}
 			}
 
-		case "r":
-			if m.activeView == viewSessions && m.drillProject != "" {
-				drilled := m.sessionsForDrill()
-				if len(drilled) > 0 && m.cursor < len(drilled) {
-					si := drilled[m.cursor]
-					if si.record.PaneID != "" {
-						_ = tmuxclient.SelectPane(si.record.PaneID)
-						_ = tmuxclient.SelectWindow(si.record.TmuxSession, si.record.WindowID)
-						_ = tmuxclient.DetachIfShpell()
-					} else {
-						return m.doResume(si)
+		case "w":
+			if m.activeView == viewSessions {
+				if m.drillProject == "" {
+					rows := buildProjRows(m.sessionItems)
+					if len(rows) > 0 && m.cursor < len(rows) {
+						return m.doNewSession(m.projPathForRow(rows[m.cursor]), "neww")
+					}
+				} else {
+					drilled := m.sessionsForDrill()
+					if len(drilled) > 0 && m.cursor < len(drilled) {
+						si := drilled[m.cursor]
+						if si.record.PaneID != "" {
+							_ = tmuxclient.SelectPane(si.record.PaneID)
+							_ = tmuxclient.SelectWindow(si.record.TmuxSession, si.record.WindowID)
+							_ = tmuxclient.DetachIfShpell()
+						} else {
+							return m.doResume(si, "neww")
+						}
+					}
+				}
+			}
+
+		case "h":
+			if m.activeView == viewSessions {
+				if m.drillProject == "" {
+					rows := buildProjRows(m.sessionItems)
+					if len(rows) > 0 && m.cursor < len(rows) {
+						return m.doNewSession(m.projPathForRow(rows[m.cursor]), "split-h")
+					}
+				} else {
+					drilled := m.sessionsForDrill()
+					if len(drilled) > 0 && m.cursor < len(drilled) {
+						si := drilled[m.cursor]
+						if si.record.PaneID == "" {
+							return m.doResume(si, "split-h")
+						}
+					}
+				}
+			}
+
+		case "v":
+			if m.activeView == viewSessions {
+				if m.drillProject == "" {
+					rows := buildProjRows(m.sessionItems)
+					if len(rows) > 0 && m.cursor < len(rows) {
+						return m.doNewSession(m.projPathForRow(rows[m.cursor]), "split-v")
+					}
+				} else {
+					drilled := m.sessionsForDrill()
+					if len(drilled) > 0 && m.cursor < len(drilled) {
+						si := drilled[m.cursor]
+						if si.record.PaneID == "" {
+							return m.doResume(si, "split-v")
+						}
 					}
 				}
 			}
@@ -355,7 +411,7 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 							_ = tmuxclient.SelectWindow(si.record.TmuxSession, si.record.WindowID)
 							_ = tmuxclient.DetachIfShpell()
 						} else {
-							return m.doResume(si)
+							return m.doResume(si, "neww")
 						}
 					}
 				}
@@ -365,8 +421,8 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 	return m, nil
 }
 
-// doResume executes tmux neww to reopen a closed session.
-func (m model) doResume(si sessionEntry) (tea.Model, tea.Cmd) {
+// doResume opens a closed session. mode is one of "neww", "split-h", "split-v".
+func (m model) doResume(si sessionEntry, mode string) (tea.Model, tea.Cmd) {
 	if !tmuxclient.InTmux() {
 		m.toast = "Cannot resume: not in tmux"
 		m.toastIsError = true
@@ -380,13 +436,86 @@ func (m model) doResume(si sessionEntry) (tea.Model, tea.Cmd) {
 		m.toastTimer = timer.NewWithInterval(5*time.Second, time.Second)
 		return m, m.toastTimer.Init()
 	}
-	cmd := exec.Command("tmux", "neww", "-c", projPath, "--", "claude", "--resume", si.record.SessionID)
-	_ = cmd.Start()
-	if cmd.Process != nil {
-		_ = cmd.Process.Release()
+	outer := tmuxclient.OuterSession()
+	var args []string
+	switch mode {
+	case "split-h", "split-v":
+		flag := "-h"
+		if mode == "split-v" {
+			flag = "-v"
+		}
+		args = []string{"split-window", flag, "-c", projPath}
+		if outer != "" {
+			args = append(args, "-t", outer)
+		}
+		args = append(args, "--", "claude", "--resume", si.record.SessionID)
+	default: // "neww"
+		args = []string{"neww", "-c", projPath}
+		if outer != "" {
+			args = append(args, "-t", outer)
+		}
+		args = append(args, "--", "claude", "--resume", si.record.SessionID)
 	}
+	_ = exec.Command("tmux", args...).Run()
 	_ = tmuxclient.DetachIfShpell()
 	return m, nil
+}
+
+// doNewSession opens a fresh claude session (no --resume) in projPath.
+// mode is "neww", "split-h", or "split-v". neww names the window after the leaf dir.
+func (m model) doNewSession(projPath, mode string) (tea.Model, tea.Cmd) {
+	if !tmuxclient.InTmux() {
+		m.toast = "Cannot open: not in tmux"
+		m.toastIsError = true
+		m.toastTimer = timer.NewWithInterval(5*time.Second, time.Second)
+		return m, m.toastTimer.Init()
+	}
+	if projPath == "" {
+		m.toast = "Cannot open: project path unknown"
+		m.toastIsError = true
+		m.toastTimer = timer.NewWithInterval(5*time.Second, time.Second)
+		return m, m.toastTimer.Init()
+	}
+	outer := tmuxclient.OuterSession()
+	var args []string
+	switch mode {
+	case "split-h", "split-v":
+		flag := "-h"
+		if mode == "split-v" {
+			flag = "-v"
+		}
+		args = []string{"split-window", flag, "-c", projPath}
+		if outer != "" {
+			args = append(args, "-t", outer)
+		}
+		args = append(args, "--", "claude")
+	default: // "neww"
+		leafName := filepath.Base(projPath)
+		args = []string{"neww", "-c", projPath, "-n", leafName}
+		if outer != "" {
+			args = append(args, "-t", outer)
+		}
+		args = append(args, "--", "claude")
+	}
+	// Run synchronously — tmux neww/split-window returns as soon as the window
+	// is created; DetachIfShpell must fire after, not before.
+	_ = exec.Command("tmux", args...).Run()
+	_ = tmuxclient.DetachIfShpell()
+	return m, nil
+}
+
+// projPathForRow finds the real filesystem path for a Level-1 project row by
+// recovering the path from any session in that group.
+func (m model) projPathForRow(row projRow) string {
+	for _, e := range m.sessionItems {
+		if groupKeyFor(e) == row.key {
+			path := sessions.RecoverPath(e.record.EncodedPath, e.record.ProjectPath)
+			if path != "" {
+				return path
+			}
+		}
+	}
+	return ""
 }
 
 func (m *model) clampCursor() {
@@ -516,25 +645,36 @@ func (m model) renderNotificationsView() string {
 	if len(m.entries) == 0 {
 		b.WriteString(dimStyle.Render("No pending notifications.") + "\n")
 	} else {
-		header := fmt.Sprintf("  %-12s  %-3s  %-20s  %-25s  %-14s  %s",
-			"STATUS", "PIN", "WINDOW", "PATH", "SESSION", "AGE")
+		// Fixed overhead: 2 prefix + 12 status + 2 + 3 pin + 2 + 20 window + 2 + 2 + 14 session + 2 + 10 age = 71
+		pathWidth := max(10, m.termWidth()-71)
+		header := fmt.Sprintf("  %-12s  %-3s  %-20s  %-*s  %-14s  %s",
+			"STATUS", "PIN", "WINDOW", pathWidth, "PATH", "SESSION", "AGE")
 		b.WriteString(dimStyle.Render(header) + "\n")
-		b.WriteString(dimStyle.Render("  "+strings.Repeat("─", 88)) + "\n")
+		b.WriteString(dimStyle.Render("  "+strings.Repeat("─", m.termWidth()-2)) + "\n")
 		for i, e := range m.entries {
 			r := e.record
-			statusBadge := renderStatusBadge(r.Status)
 			pinCol := "   "
 			if e.pinned {
 				pinCol = "📌 "
 			}
-			// Truncate path to 25 visual columns to prevent column overflow.
-			path := runewidth.Truncate(e.Path, 25, "…")
-			path = runewidth.FillRight(path, 25)
-			line := fmt.Sprintf("%s  %s  %-20s  %s  %-14s  %s",
-				statusBadge, pinCol, r.WindowName, path, r.Session, formatAge(r.TS))
+			path := runewidth.Truncate(e.Path, pathWidth, "…")
+			path = runewidth.FillRight(path, pathWidth)
 			if i == m.cursor {
-				b.WriteString(selectedStyle.Render("> ") + line + "\n")
+				bgs := lipgloss.NewStyle().Background(selBg)
+				sep := bgs.Render("  ")
+				badge := renderStatusBadge(r.Status, selBg)
+				pin := bgs.Render(pinCol)
+				win := bgs.Render(fmt.Sprintf("%-20s", r.WindowName))
+				ps := bgs.Render(path)
+				sess := bgs.Render(fmt.Sprintf("%-14s", r.Session))
+				age := bgs.Render(formatAge(r.TS))
+				ind := selectedStyle.Background(selBg).Render("> ")
+				innerW := 2 + 12 + 2 + runewidth.StringWidth(pinCol) + 2 + 20 + 2 + pathWidth + 2 + 14 + 2 + runewidth.StringWidth(formatAge(r.TS))
+				pad := bgs.Render(strings.Repeat(" ", max(0, m.termWidth()-innerW)))
+				b.WriteString(ind+badge+sep+pin+sep+win+sep+ps+sep+sess+sep+age+pad+"\n")
 			} else {
+				line := fmt.Sprintf("%s  %s  %-20s  %s  %-14s  %s",
+					renderStatusBadge(r.Status), pinCol, r.WindowName, path, r.Session, formatAge(r.TS))
 				b.WriteString("  " + normalStyle.Render(line) + "\n")
 			}
 		}
@@ -557,25 +697,36 @@ func (m model) renderSessionsView() string {
 			b.WriteString(dimStyle.Render(msg) + "\n")
 			return b.String()
 		}
-		header := fmt.Sprintf("  %-12s  %-32s  %5s  %s", "STATUS", "PROJECT", "COUNT", "LAST USED")
+		// Fixed overhead: 2 prefix + 12 status + 2 + 2 + 5 count + 2 + 10 age = 35
+		projWidth := max(15, m.termWidth()-35)
+		header := fmt.Sprintf("  %-12s  %-*s  %5s  %s", "STATUS", projWidth, "PROJECT", "COUNT", "LAST USED")
 		b.WriteString(dimStyle.Render(header) + "\n")
-		b.WriteString(dimStyle.Render("  "+strings.Repeat("─", 65)) + "\n")
+		b.WriteString(dimStyle.Render("  "+strings.Repeat("─", m.termWidth()-2)) + "\n")
 		for i, row := range rows {
 			status := row.bestStatus
 			if status == "" {
 				status = "idle"
 			}
-			badge := renderStatusBadge(status)
-			proj := runewidth.Truncate(row.key, 32, "…")
-			proj = runewidth.FillRight(proj, 32)
-			line := fmt.Sprintf("%s  %s  %5d  %s", badge, proj, row.count, formatAge(row.lastActivity))
+			proj := runewidth.Truncate(row.key, projWidth, "…")
+			proj = runewidth.FillRight(proj, projWidth)
 			if i == m.cursor {
-				b.WriteString(selectedStyle.Render("> ") + line + "\n")
+				bgs := lipgloss.NewStyle().Background(selBg)
+				sep := bgs.Render("  ")
+				badge := renderStatusBadge(status, selBg)
+				prj := bgs.Render(proj)
+				cnt := bgs.Render(fmt.Sprintf("%5d", row.count))
+				age := bgs.Render(formatAge(row.lastActivity))
+				ind := selectedStyle.Background(selBg).Render("> ")
+				innerW := 2 + 12 + 2 + projWidth + 2 + 5 + 2 + runewidth.StringWidth(formatAge(row.lastActivity))
+				pad := bgs.Render(strings.Repeat(" ", max(0, m.termWidth()-innerW)))
+				b.WriteString(ind+badge+sep+prj+sep+cnt+sep+age+pad+"\n")
 			} else {
+				badge := renderStatusBadge(status)
+				line := fmt.Sprintf("%s  %s  %5d  %s", badge, proj, row.count, formatAge(row.lastActivity))
 				b.WriteString("  " + normalStyle.Render(line) + "\n")
 			}
 		}
-		b.WriteString("\n" + dimStyle.Render("↑/↓ j/k  •  enter: open  •  s: sort  •  f: filter  •  tab: Notifications  •  q: quit") + "\n")
+		b.WriteString("\n" + dimStyle.Render("↑/↓ j/k  •  enter: sessions  •  w: new win  h: split-h  v: split-v  •  s: sort  •  f: filter  •  tab: Notifications  •  q: quit") + "\n")
 		return b.String()
 	}
 
@@ -596,7 +747,6 @@ func (m model) renderSessionsView() string {
 			if status == "" {
 				status = "idle"
 			}
-			badge := renderStatusBadge(status)
 			pinCol := "   "
 			if r.Pinned {
 				pinCol = "📌 "
@@ -605,27 +755,41 @@ func (m model) renderSessionsView() string {
 			if len(sid) > 8 {
 				sid = sid[:8]
 			}
-			line := fmt.Sprintf("%s  %s  %-10s  %s", badge, pinCol, sid, formatAge(r.LastActivity))
 			if i == m.cursor {
-				b.WriteString(selectedStyle.Render("> ") + line + "\n")
+				bgs := lipgloss.NewStyle().Background(selBg)
+				sep := bgs.Render("  ")
+				badge := renderStatusBadge(status, selBg)
+				pin := bgs.Render(pinCol)
+				sidStr := bgs.Render(fmt.Sprintf("%-10s", sid))
+				age := bgs.Render(formatAge(r.LastActivity))
+				ind := selectedStyle.Background(selBg).Render("> ")
+				innerW := 2 + 12 + 2 + runewidth.StringWidth(pinCol) + 2 + 10 + 2 + runewidth.StringWidth(formatAge(r.LastActivity))
+				pad := bgs.Render(strings.Repeat(" ", max(0, m.termWidth()-innerW)))
+				b.WriteString(ind+badge+sep+pin+sep+sidStr+sep+age+pad+"\n")
 			} else {
+				badge := renderStatusBadge(status)
+				line := fmt.Sprintf("%s  %s  %-10s  %s", badge, pinCol, sid, formatAge(r.LastActivity))
 				b.WriteString("  " + normalStyle.Render(line) + "\n")
 			}
 		}
 	}
-	b.WriteString("\n" + dimStyle.Render("↑/↓ j/k  •  enter/r: resume  •  p: pin  •  esc: back  •  tab: Notifications  •  q: quit") + "\n")
+	b.WriteString("\n" + dimStyle.Render("↑/↓ j/k  •  enter/w: new win  h: split-h  v: split-v  •  p: pin  •  esc: back  •  tab: Notifications  •  q: quit") + "\n")
 	return b.String()
 }
 
 // renderStatusBadge renders a status string with its icon, padded to a fixed
 // visual width using runewidth so emoji-width differences don't misalign columns.
-func renderStatusBadge(status string) string {
+// Pass an optional background color to bake it into the badge (needed for full-width row highlights).
+func renderStatusBadge(status string, bg ...lipgloss.Color) string {
 	if status == "" {
 		status = "waiting"
 	}
 	style, ok := statusStyles[status]
 	if !ok {
 		style = dimStyle
+	}
+	if len(bg) > 0 {
+		style = style.Background(bg[0])
 	}
 	icon, ok := statusIcons[status]
 	if !ok {

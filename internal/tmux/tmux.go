@@ -127,6 +127,22 @@ func ListLivePanes() ([]string, error) {
 	return strings.Split(out, "\n"), nil
 }
 
+// OuterSession returns the name of the first tmux session that is not _shpell-session.
+// Used to target split-window commands at the user's real session when the dashboard
+// is running inside the grimoire popup.
+func OuterSession() string {
+	out, err := run("list-sessions", "-F", "#{session_name}")
+	if err != nil {
+		return ""
+	}
+	for _, name := range strings.Split(out, "\n") {
+		if name != "_shpell-session" && name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
 // DetachIfShpell calls detach-client when running inside grimoire's _shpell-session,
 // which triggers grimoire's cleanup hook and closes the popup.
 func DetachIfShpell() error {

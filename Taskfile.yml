@@ -19,11 +19,12 @@ tasks:
 
   run:
     desc: Build and run the claude-notify binary
+    silent: true
     aliases: [r]
     cmds:
-      - task: build
+      - go build -o {{.BINARY}} {{.CMD}}
       - clear
-      - ./{{.BINARY}}
+      - ./{{.BINARY}} 2>/tmp/cn-crash.log; cat /tmp/cn-crash.log >&2
 
   test:
     desc: Run all tests

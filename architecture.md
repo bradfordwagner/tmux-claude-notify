@@ -54,8 +54,10 @@ User invokes keybinding (C-M-p by default):
       │   ├─ s: cycle within-group sort (age ↔ status)
       │   ├─ f: toggle filter to active panes only (pinned always shown)
       │   ├─ p: pin/unpin session via sessions.SetPinned
-      │   ├─ enter/r (active pane): SelectWindow + DetachIfShpell
-      │   ├─ enter/r (closed session): sessions.RecoverPath → tmux neww -c <path> -- claude --resume <uuid>
+      │   ├─ enter/w (active pane): SelectPane + SelectWindow + DetachIfShpell
+      │   ├─ enter/w (closed session): sessions.RecoverPath → tmux neww -c <path> -t <outer> -- claude --resume <uuid>
+      │   ├─ h/v (closed session): split-window -h/-v -c <path> -t <outer> -- claude --resume <uuid>
+      │   ├─ w/h/v (L1 project row): tmux neww/split-window -c <path> -t <outer> -- claude  (fresh session, -n <leaf> for neww)
       │   └─ tab: switch to Notifications view
       ├─ transcript watcher: watches ~/.claude/projects/**/*.jsonl via fsnotify
       │   ├─ state change → running/waiting/stale → UpdateStatus or Append
@@ -85,15 +87,19 @@ User invokes keybinding (C-M-p by default):
                   ├──► set-option -p window-style bg=<color>  (pane pop bg, pane-scoped)
                   ├──► notify-send                      (desktop toast, optional)
                   │
-                  └──► active-pane auto-reset (if pane is currently focused)
+                  └──► active-pane auto-reset (always, when delaySecs > 0)
                        │  reads @claude-notify-active-reset-seconds (default 15; 0=off)
-                       │  IsPaneFocused: pane_active=1 AND window_active=1
                        │
                        └─► forkAutoReset → detached subprocess (Setsid, closed stdio)
-                                │  sleeps N seconds
-                                ├─ IsShpellOpen? yes → exit (popup open; user dismisses via dashboard)
-                                ├─ HasUnclearedPane? yes → runClear (same as manual dismiss)
-                                └─ HasUnclearedPane? no  → exit (already dismissed)
+                                │
+                                ├─ window_active=1 at start? (focused at notify time)
+                                │     yes → sleep N seconds → check IsShpellOpen + HasUnclearedPane → runClear
+                                │
+                                └─ window_active=0 at start? (pane in inactive window)
+                                      poll every 2s (up to 4h):
+                                      ├─ HasUnclearedPane? no → exit (cleared by other means)
+                                      ├─ IsShpellOpen? yes → continue (dashboard handles it)
+                                      └─ window_active=1? yes → runClear (user navigated here)
 
  Transcript watcher fires (while dashboard is open)
       │
@@ -215,8 +221,9 @@ DEVELOPMENT.md                 ordered development items
  User pins session (p key)
       └─► sessions.SetPinned(sessionID, pinned)  → atomic JSONL rewrite
 
- User resumes closed session (r key in Sessions view)
-      └─► sessions.RecoverPath → tmux neww -c <path> -- claude --resume <session_id>
+ User opens/resumes session (w/h/v in Sessions view)
+      ├─ L1 project row: OuterSession() → tmux neww/split-window -c <path> -t <outer> -- claude  (fresh)
+      └─ L2 closed session: OuterSession() → tmux neww/split-window -c <path> -t <outer> -- claude --resume <session_id>
           └─► DetachIfShpell (close popup)
 ```
 
@@ -234,7 +241,7 @@ DEVELOPMENT.md                 ordered development items
 | Dashboard keybinding | grimoire shpell if present, `display-popup` fallback | grimoire provides native toggle (C-M-p again to close); popup requires explicit q/esc |
 | Dashboard selection | stay open until list empty, then DetachIfShpell | allows handling multiple pending notifications in one session |
 | Auto-clear hook | none (removed) | pane-focus-in broken in WSL2; after-select-window fires on any tmux command |
-| Active-pane auto-reset | detached subprocess, `@claude-notify-active-reset-seconds` (default 15; 0=off) | focused-pane notifications are noise; subprocess sleeps, checks popup state, then checks idempotency before clearing |
+| Active-pane auto-reset | detached subprocess always spawned, `@claude-notify-active-reset-seconds` (default 15; 0=off) | clears pop when user navigates to pane (poll) or after grace period if already focused; pane-focus-in broken in WSL2 so polling subprocess is the mechanism |
 | Idempotent notify | `HasUnclearedPane` before Append | Stop fires multiple times per skill invocation; only first call creates JSONL entry |
 | Multi-pane window clearing | `UnclearedForWindow` after `ClearPane` gates style teardown | clearing one pane must not remove the window highlight while sibling panes still have uncleared notifications |
 | Gone-pane visibility | show all uncleared entries; `(gone)` in PATH when pane missing | live-pane filter silently hides valid notifications (e.g. ~/dotfiles session after pane restart) |

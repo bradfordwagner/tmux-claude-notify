@@ -139,18 +139,34 @@ In Level-2, pressing `p` SHALL toggle the `pinned` flag on the currently selecte
 - **WHEN** the cursor is on a pinned session and the user presses `p`
 - **THEN** the session's `pinned` flag is set to `false`
 
-### Requirement: `enter`/`r` navigates to or resumes selected session
-In Level-2, pressing `enter` or `r` on a session with an active pane SHALL call `SelectPane` + `SelectWindow` to navigate to that pane, then `DetachIfShpell` to close the popup. For closed sessions (no `pane_id`), `r` SHALL launch `tmux neww -c <path> -- claude --resume <session_id>`.
+### Requirement: Sessions L1 — `w`/`h`/`v` open a new claude session in the selected project
+At Level-1 (project list), `w` opens `tmux neww -c <path> -n <leaf> -t <outer-session> -- claude`. `h`/`v` split horizontally/vertically in the outer (non-shpell) session. These create a FRESH session, not a resume. All commands target the outer session to avoid creating windows in `_shpell-session`.
 
-#### Scenario: enter on active session navigates to pane
+#### Scenario: w at L1 opens new window named after project leaf
+- **WHEN** the user presses `w` at Sessions L1
+- **THEN** `tmux neww -c <project_path> -n <leaf_dir> -t <outer-session> -- claude` is executed and the popup closes
+
+#### Scenario: h/v at L1 split in outer session
+- **WHEN** the user presses `h` or `v` at Sessions L1
+- **THEN** `tmux split-window -h/-v -c <path> -t <outer-session> -- claude` is executed in the user's real working session
+
+### Requirement: Sessions L2 — `w`/`h`/`v` navigate to or resume selected session
+At Level-2, `w`/`enter` on an active session navigates to its pane. On a closed session (no `pane_id`), `w` resumes via `tmux neww -c <path> -t <outer-session> -- claude --resume <session_id>`. `h`/`v` split horizontally/vertically for closed sessions.
+
+#### Scenario: enter/w on active session navigates to pane
 - **WHEN** the selected session has a non-empty `pane_id`
-- **AND** the user presses `enter` or `r`
+- **AND** the user presses `enter` or `w`
 - **THEN** `SelectPane(paneID)` and `SelectWindow(session, windowID)` are called, then `DetachIfShpell`
 
-#### Scenario: r on closed session resumes claude
+#### Scenario: w on closed session resumes claude in new window
 - **WHEN** the selected session has an empty `pane_id`
-- **AND** the user presses `r`
-- **THEN** `tmux neww -c <recovered_path> -- claude --resume <session_id>` is executed
+- **AND** the user presses `w`
+- **THEN** `tmux neww -c <recovered_path> -t <outer-session> -- claude --resume <session_id>` is executed
+
+#### Scenario: h/v on closed session resumes in split pane
+- **WHEN** the selected session has an empty `pane_id`
+- **AND** the user presses `h` or `v`
+- **THEN** `tmux split-window -h/-v -c <path> -t <outer-session> -- claude --resume <session_id>` is executed
 
 #### Scenario: No active pane in Notifications view
 - **WHEN** the selected Notifications entry is a session-only entry with no active pane

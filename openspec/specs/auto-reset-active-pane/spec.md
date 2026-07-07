@@ -6,20 +6,30 @@ When a Claude notification fires on the currently focused pane (the user is alre
 
 ## Requirements
 
-### Requirement: Auto-reset fires when the notified pane's window is currently active
-When `claude-notify notify` is invoked and the window containing the notified pane is the user's currently active window, the binary SHALL fork a detached subprocess (`claude-notify auto-reset --pane <id> --delay <N>`) immediately after applying the visual pop, then exit. The subprocess sleeps N seconds (from `@claude-notify-active-reset-seconds`, default `15`) and then clears the notification. If `@claude-notify-active-reset-seconds` is `0`, the auto-reset is disabled and the notification persists as normal. The check uses `window_active` only — not `pane_active` — so auto-reset fires even when the user is focused on a different split pane in the same window.
+### Requirement: Auto-reset subprocess is always spawned when a notification fires
+When `claude-notify notify` is invoked and `@claude-notify-active-reset-seconds` is non-zero, the binary SHALL always fork a detached subprocess (`claude-notify auto-reset --pane <id> --delay <N>`), regardless of whether the notified pane's window is currently active. The subprocess behavior differs based on whether the window is focused at notify time (see below). If `@claude-notify-active-reset-seconds` is `0`, the auto-reset is disabled entirely.
 
-#### Scenario: Active window — auto-reset subprocess spawned
+#### Scenario: Always spawn subprocess when auto-reset is enabled
 - **WHEN** `claude-notify notify` is invoked
-- **AND** `tmux display-message -t $TMUX_PANE -p "#{window_active}"` returns `1`
-- **THEN** a detached `claude-notify auto-reset --pane <id> --delay <N>` subprocess is started
+- **AND** `@claude-notify-active-reset-seconds` is non-zero
+- **THEN** a detached `claude-notify auto-reset --pane <id> --delay <N>` subprocess is started unconditionally
 - **AND** the notify command exits immediately without blocking
 
-#### Scenario: Inactive window — no auto-reset
+#### Scenario: Active window at notify time — grace-period then clear
 - **WHEN** `claude-notify notify` is invoked
-- **AND** the window containing the notified pane is not the user's current window (`window_active = 0`)
-- **THEN** no auto-reset subprocess is spawned
-- **AND** the notification persists until manually dismissed
+- **AND** `tmux display-message -t $TMUX_PANE -p "#{window_active}"` returns `1`
+- **THEN** the subprocess sleeps N seconds (grace period), then clears the notification if still uncleared and popup is not open
+
+#### Scenario: Inactive window at notify time — poll for focus then clear
+- **WHEN** `claude-notify notify` is invoked
+- **AND** the window is not the user's current window (`window_active = 0`)
+- **THEN** the subprocess polls `window_active` every 2 seconds (up to 4 hours)
+- **AND** when `window_active=1` is first detected, clears the notification immediately (if still uncleared and popup not open)
+
+#### Scenario: User navigates to popped pane via tmux — auto-clears
+- **WHEN** a notification is set on a pane in an inactive window
+- **AND** the user switches to that window using tmux (not the dashboard)
+- **THEN** the auto-reset subprocess detects focus and clears the pop within 2 seconds
 
 #### Scenario: Auto-reset disabled via option — no subprocess
 - **WHEN** `@claude-notify-active-reset-seconds` is set to `0`

@@ -112,12 +112,11 @@ func runNotify() error {
 		return err
 	}
 
-	// If the pane is currently focused and auto-reset is enabled, fork a detached
-	// subprocess to clear the notification after the configured delay.
+	// Fork a detached subprocess to auto-clear the notification.
+	// If the pane is already focused, it clears after delaySecs (grace period).
+	// If not focused, it polls until the user navigates to the pane, then clears.
 	if delaySecs := tmuxclient.ActiveResetSeconds(); delaySecs > 0 {
-		if tmuxclient.IsPaneFocused(paneID) {
-			_ = forkAutoReset(paneID, delaySecs)
-		}
+		_ = forkAutoReset(paneID, delaySecs)
 	}
 
 	return nil
@@ -149,16 +148,36 @@ func runClear(paneID string) error {
 	return nil
 }
 
-// runAutoReset sleeps delaySecs then clears the notification if still uncleared
-// and the dashboard popup is not open. Runs in a detached subprocess.
+// runAutoReset clears the notification once the user's window becomes focused.
+// If the pane was already focused at notify time, waits delaySecs before clearing.
+// Otherwise polls every 2 seconds (up to 4 hours) until the window is focused, then clears.
 func runAutoReset(paneID string, delaySecs int) {
-	time.Sleep(time.Duration(delaySecs) * time.Second)
-	if tmuxclient.IsShpellOpen() {
+	if tmuxclient.IsPaneFocused(paneID) {
+		// Pane is currently focused — original behavior: grace period, then clear.
+		time.Sleep(time.Duration(delaySecs) * time.Second)
+		if !tmuxclient.IsShpellOpen() {
+			if uncleared, _ := store.HasUnclearedPane(paneID); uncleared {
+				_ = runClear(paneID)
+			}
+		}
 		return
 	}
-	uncleared, _ := store.HasUnclearedPane(paneID)
-	if uncleared {
-		_ = runClear(paneID)
+	// Pane not focused — poll until the user navigates here, then clear immediately.
+	const maxPoll = 4 * time.Hour
+	const pollInterval = 2 * time.Second
+	start := time.Now()
+	for time.Since(start) < maxPoll {
+		time.Sleep(pollInterval)
+		if uncleared, _ := store.HasUnclearedPane(paneID); !uncleared {
+			return // cleared by dashboard or transcript watcher
+		}
+		if tmuxclient.IsShpellOpen() {
+			continue // dashboard open — user handles it there
+		}
+		if tmuxclient.IsPaneFocused(paneID) {
+			_ = runClear(paneID)
+			return
+		}
 	}
 }
 
