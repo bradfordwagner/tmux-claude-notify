@@ -6,6 +6,17 @@ Defines the visual structure and column ordering of rows in the dashboard TUI �
 
 ## Requirements
 
+### Requirement: Tab-toggle header displays active view name
+The dashboard SHALL render a tab header at the top showing both view names ("Notifications" and "Sessions"), with the active view highlighted and the inactive view dimmed.
+
+#### Scenario: Notifications tab highlighted when in Notifications view
+- **WHEN** the active view is Notifications
+- **THEN** the header renders "[ Notifications ]  Sessions" with the active tab in the accent color
+
+#### Scenario: Sessions tab highlighted when in Sessions view
+- **WHEN** the active view is Sessions
+- **THEN** the header renders "  Notifications  [ Sessions ]" with the active tab in the accent color
+
 ### Requirement: Notification rows display column headers
 The dashboard notification list SHALL render a header row and a separator line above the entries so users can identify each column without prior knowledge of the layout.
 
@@ -13,7 +24,7 @@ The dashboard notification list SHALL render a header row and a separator line a
 - **WHEN** one or more notification entries are present
 - **THEN** a header row reading "STATUS", "PIN", "WINDOW", "PATH", "SESSION", "AGE" is rendered above the entries
 - **AND** a separator line (e.g. "──────") appears between the header row and the first entry
-- **AND** PATH values longer than 25 visual columns are truncated with a `…` suffix
+- **AND** PATH values longer than 22 visual columns are truncated with a `…` prefix
 
 #### Scenario: No headers when list is empty
 - **WHEN** there are no pending notifications
@@ -102,7 +113,7 @@ When a notification entry's pane no longer exists in the current tmux server, th
 - **THEN** the PATH column displays the truncated real path as before
 
 ### Requirement: Sessions view Level-1 displays project-level rows
-The Sessions view Level-1 SHALL render one row per distinct project (plus a "📌 Pinned" group if any sessions are pinned). Columns: STATUS (most urgent status among the project's sessions), PROJECT (path, truncated to 32 visual columns), COUNT (number of sessions), LAST USED (age of most recently active session).
+The Sessions view Level-1 SHALL render one row per distinct project (plus a "📌 Pinned" group if any sessions are pinned). Columns: STATUS (most urgent status among the project's sessions), PROJECT (trimmed path, truncated to 30 visual columns), COUNT (number of sessions), LAST USED (age of most recently active session).
 
 #### Scenario: Level-1 column header row
 - **WHEN** the Sessions view is active in Level-1 and records exist

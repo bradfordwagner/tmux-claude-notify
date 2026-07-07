@@ -7,7 +7,7 @@ The transcript watcher is a component that monitors Claude Code transcript files
 ## Requirements
 
 ### Requirement: Watcher discovers Claude Code transcript files via live panes
-The transcript watcher SHALL discover transcript files by calling `tmux list-panes -a` and filtering for panes whose `pane_current_command` matches the prefix `claude*`. For each matching pane, it forward-encodes `pane_current_path` (replacing `/` and `.` with `-`) to locate the project directory under `~/.claude/projects/`, then picks the most recently modified `.jsonl` file in that directory (modified within the past 24 hours). Only those specific transcript files are registered for fsnotify watching.
+The transcript watcher SHALL discover transcript files by calling `tmux list-panes -a` and filtering for panes whose `pane_current_command` matches the prefix `claude*`. For each matching pane, it forward-encodes `pane_current_path` (replacing `/` and `.` with `-`) to locate the project directory under `~/.claude/projects/`, then picks the most recently modified `.jsonl` file in that directory (modified within the past 24 hours). Only those specific transcript files are registered for fsnotify watching. When a pane is correlated, the watcher SHALL also upsert a sessions.jsonl record with the real `pane_current_path`.
 
 #### Scenario: Pane path forward-encoded to project dir
 - **WHEN** a live tmux pane has `pane_current_path=/home/bw/foo.bar` and `pane_current_command=claude`
@@ -17,6 +17,10 @@ The transcript watcher SHALL discover transcript files by calling `tmux list-pan
 #### Scenario: Pane matched by encoded working directory
 - **WHEN** the forward-encoded path matches an existing project directory
 - **THEN** that pane is associated with the most recently modified transcript in that directory (within 24 hours)
+
+#### Scenario: Pane correlated — session-index updated with real path
+- **WHEN** pane `%5` with `pane_current_path=/home/bw/myproject` is correlated to a transcript
+- **THEN** a sessions.jsonl record is upserted with `project_path: "/home/bw/myproject"` and `pane_id: "%5"`
 
 #### Scenario: No matching pane — transcript not watched
 - **WHEN** no live tmux pane with a `claude*` command has a path that encodes to the project directory
