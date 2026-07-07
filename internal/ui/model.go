@@ -10,11 +10,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/timer"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/fsnotify/fsnotify"
 	"github.com/mattn/go-runewidth"
+	"github.com/sahilm/fuzzy"
 
 	"github.com/bradfordwagner/tmux-claude-notify/internal/sessions"
 	"github.com/bradfordwagner/tmux-claude-notify/internal/setup"
@@ -114,6 +116,11 @@ type model struct {
 	drillProject string // "" = projects table (Level 1); non-empty = sessions for this project (Level 2)
 	sortBy       sortField
 	filterActive bool
+
+	searchMode  bool
+	searchFocus bool // true = textinput has keyboard; false = table has keyboard
+	searchQuery string
+	searchInput textinput.Model
 }
 
 func (m model) termWidth() int {
@@ -142,7 +149,11 @@ func newModel() (model, error) {
 		return model{}, err
 	}
 
-	m := model{watcher: fw, transcriptWatcher: tw}
+	si := textinput.New()
+	si.Placeholder = "fuzzy filter…"
+	si.CharLimit = 80
+
+	m := model{watcher: fw, transcriptWatcher: tw, searchInput: si}
 	m.setupResult, m.setupMessage = checkAndConfigure()
 	if m.setupMessage != "" {
 		m.toast = m.setupMessage
@@ -225,6 +236,41 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 		return m, watcherCmd(m.transcriptWatcher)
 
 	case tea.KeyMsg:
+		// Input-focused search mode: alphanumeric keys go to the textinput.
+		// Tab drops focus to the table; esc exits search entirely.
+		if m.searchMode && m.searchFocus {
+			switch msg.String() {
+			case "ctrl+c":
+				m.watcher.Close()
+				m.transcriptWatcher.Close()
+				m.quitting = true
+				return m, tea.Quit
+
+			case "esc":
+				m.clearSearch()
+				return m, nil
+
+			case "tab":
+				// Hand focus to the table; filter stays active.
+				m.searchFocus = false
+				m.searchInput.Blur()
+				return m, nil
+
+			case "enter", " ":
+				// Fall through to the normal enter handler below.
+
+			default:
+				var tiCmd tea.Cmd
+				m.searchInput, tiCmd = m.searchInput.Update(msg)
+				m.searchQuery = m.searchInput.Value()
+				m.clampCursorToFiltered()
+				return m, tiCmd
+			}
+		}
+
+		// Normal key handling — active both when search is off and when search is
+		// on but the table has focus. Filtered helpers are used throughout so the
+		// correct (possibly narrowed) list is always targeted.
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.watcher.Close()
@@ -232,8 +278,17 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 
+		case "/":
+			if !m.searchMode {
+				m.searchMode = true
+				m.searchFocus = true
+				m.searchInput.Focus()
+			}
+
 		case "esc":
-			if m.activeView == viewSessions && m.drillProject != "" {
+			if m.searchMode {
+				m.clearSearch()
+			} else if m.activeView == viewSessions && m.drillProject != "" {
 				m.drillProject = ""
 				m.cursor = 0
 			} else {
@@ -244,15 +299,22 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 			}
 
 		case "tab":
-			if m.activeView == viewNotifications {
-				m.activeView = viewSessions
-				m.cursor = 0
-				m.drillProject = ""
-				m.sessionItems = loadSessionEntries(m.sortBy, m.filterActive)
+			if m.searchMode {
+				// Tab returns focus to the input within the same view.
+				m.searchFocus = true
+				m.searchInput.Focus()
 			} else {
-				m.activeView = viewNotifications
-				m.cursor = 0
-				m.drillProject = ""
+				// Tab switches views when not searching.
+				if m.activeView == viewNotifications {
+					m.activeView = viewSessions
+					m.cursor = 0
+					m.drillProject = ""
+					m.sessionItems = loadSessionEntries(m.sortBy, m.filterActive)
+				} else {
+					m.activeView = viewNotifications
+					m.cursor = 0
+					m.drillProject = ""
+				}
 			}
 
 		case "up", "k":
@@ -261,10 +323,7 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 			}
 
 		case "down", "j":
-			maxIdx := m.sessionListLen() - 1
-			if m.activeView == viewNotifications {
-				maxIdx = len(m.entries) - 1
-			}
+			maxIdx := m.filteredListLen() - 1
 			if m.cursor < maxIdx {
 				m.cursor++
 			}
@@ -287,7 +346,7 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 			switch m.activeView {
 			case viewSessions:
 				if m.drillProject != "" {
-					drilled := m.sessionsForDrill()
+					drilled := m.filteredDrill()
 					if len(drilled) > 0 && m.cursor < len(drilled) {
 						si := drilled[m.cursor]
 						if err := sessions.SetPinned(si.record.SessionID, !si.record.Pinned); err == nil {
@@ -298,8 +357,9 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 					}
 				}
 			case viewNotifications:
-				if len(m.entries) > 0 {
-					e := m.entries[m.cursor]
+				filtered := m.filteredEntries()
+				if len(filtered) > 0 && m.cursor < len(filtered) {
+					e := filtered[m.cursor]
 					if e.sessionID != "" {
 						if err := sessions.SetPinned(e.sessionID, !e.pinned); err == nil {
 							m.entries = loadEntries()
@@ -313,12 +373,12 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 		case "w":
 			if m.activeView == viewSessions {
 				if m.drillProject == "" {
-					rows := buildProjRows(m.sessionItems)
+					rows := buildProjRows(m.filteredSessions())
 					if len(rows) > 0 && m.cursor < len(rows) {
 						return m.doNewSession(m.projPathForRow(rows[m.cursor]), "neww")
 					}
 				} else {
-					drilled := m.sessionsForDrill()
+					drilled := m.filteredDrill()
 					if len(drilled) > 0 && m.cursor < len(drilled) {
 						si := drilled[m.cursor]
 						if si.record.PaneID != "" {
@@ -335,12 +395,12 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 		case "h":
 			if m.activeView == viewSessions {
 				if m.drillProject == "" {
-					rows := buildProjRows(m.sessionItems)
+					rows := buildProjRows(m.filteredSessions())
 					if len(rows) > 0 && m.cursor < len(rows) {
 						return m.doNewSession(m.projPathForRow(rows[m.cursor]), "split-h")
 					}
 				} else {
-					drilled := m.sessionsForDrill()
+					drilled := m.filteredDrill()
 					if len(drilled) > 0 && m.cursor < len(drilled) {
 						si := drilled[m.cursor]
 						if si.record.PaneID == "" {
@@ -353,12 +413,12 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 		case "v":
 			if m.activeView == viewSessions {
 				if m.drillProject == "" {
-					rows := buildProjRows(m.sessionItems)
+					rows := buildProjRows(m.filteredSessions())
 					if len(rows) > 0 && m.cursor < len(rows) {
 						return m.doNewSession(m.projPathForRow(rows[m.cursor]), "split-v")
 					}
 				} else {
-					drilled := m.sessionsForDrill()
+					drilled := m.filteredDrill()
 					if len(drilled) > 0 && m.cursor < len(drilled) {
 						si := drilled[m.cursor]
 						if si.record.PaneID == "" {
@@ -371,8 +431,9 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 		case "enter", " ":
 			switch m.activeView {
 			case viewNotifications:
-				if len(m.entries) > 0 {
-					selected := m.entries[m.cursor]
+				filtered := m.filteredEntries()
+				if len(filtered) > 0 && m.cursor < len(filtered) {
+					selected := filtered[m.cursor]
 					if selected.isSessionEntry && selected.record.Pane == "" {
 						m.toast = "No active pane — switch to Sessions tab to resume"
 						m.toastIsError = false
@@ -398,13 +459,14 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 				}
 			case viewSessions:
 				if m.drillProject == "" {
-					rows := buildProjRows(m.sessionItems)
+					rows := buildProjRows(m.filteredSessions())
 					if len(rows) > 0 && m.cursor < len(rows) {
 						m.drillProject = rows[m.cursor].key
+						m.clearSearch()
 						m.cursor = 0
 					}
 				} else {
-					drilled := m.sessionsForDrill()
+					drilled := m.filteredDrill()
 					if len(drilled) > 0 && m.cursor < len(drilled) {
 						si := drilled[m.cursor]
 						if si.record.PaneID != "" {
@@ -420,6 +482,14 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *model) clearSearch() {
+	m.searchMode = false
+	m.searchFocus = false
+	m.searchQuery = ""
+	m.searchInput.SetValue("")
+	m.searchInput.Blur()
 }
 
 // doResume opens a closed session. mode is one of "neww", "split-h", "split-v".
@@ -520,13 +590,27 @@ func (m model) projPathForRow(row projRow) string {
 }
 
 func (m *model) clampCursor() {
-	listLen := m.sessionListLen()
-	if m.activeView == viewNotifications {
-		listLen = len(m.entries)
-	}
+	listLen := m.filteredListLen()
 	if m.cursor >= listLen {
 		m.cursor = max(0, listLen-1)
 	}
+}
+
+func (m *model) clampCursorToFiltered() {
+	listLen := m.filteredListLen()
+	if m.cursor >= listLen {
+		m.cursor = max(0, listLen-1)
+	}
+}
+
+func (m model) filteredListLen() int {
+	if m.activeView == viewNotifications {
+		return len(m.filteredEntries())
+	}
+	if m.drillProject != "" {
+		return len(m.filteredDrill())
+	}
+	return len(buildProjRows(m.filteredSessions()))
 }
 
 func (m model) sessionListLen() int {
@@ -542,6 +626,61 @@ func (m model) sessionsForDrill() []sessionEntry {
 		if groupKeyFor(e) == m.drillProject {
 			result = append(result, e)
 		}
+	}
+	return result
+}
+
+// filteredEntries returns m.entries filtered by searchQuery using fuzzy matching.
+// Match target per row: window name + " " + path + " " + session.
+func (m model) filteredEntries() []entry {
+	if m.searchQuery == "" {
+		return m.entries
+	}
+	targets := make([]string, len(m.entries))
+	for i, e := range m.entries {
+		targets[i] = e.record.WindowName + " " + e.Path + " " + e.record.Session
+	}
+	matches := fuzzy.Find(m.searchQuery, targets)
+	result := make([]entry, 0, len(matches))
+	for _, match := range matches {
+		result = append(result, m.entries[match.Index])
+	}
+	return result
+}
+
+// filteredSessions returns m.sessionItems filtered by searchQuery.
+// Match target per row: project path (key).
+func (m model) filteredSessions() []sessionEntry {
+	if m.searchQuery == "" {
+		return m.sessionItems
+	}
+	targets := make([]string, len(m.sessionItems))
+	for i, e := range m.sessionItems {
+		targets[i] = e.projPath
+	}
+	matches := fuzzy.Find(m.searchQuery, targets)
+	result := make([]sessionEntry, 0, len(matches))
+	for _, match := range matches {
+		result = append(result, m.sessionItems[match.Index])
+	}
+	return result
+}
+
+// filteredDrill returns sessions for the current drill project, filtered by searchQuery.
+// Match target per row: session ID + " " + window name.
+func (m model) filteredDrill() []sessionEntry {
+	drilled := m.sessionsForDrill()
+	if m.searchQuery == "" {
+		return drilled
+	}
+	targets := make([]string, len(drilled))
+	for i, e := range drilled {
+		targets[i] = e.record.SessionID + " " + e.record.WindowName
+	}
+	matches := fuzzy.Find(m.searchQuery, targets)
+	result := make([]sessionEntry, 0, len(matches))
+	for _, match := range matches {
+		result = append(result, drilled[match.Index])
 	}
 	return result
 }
@@ -594,6 +733,10 @@ func (m model) View() string {
 	}
 	var b strings.Builder
 	b.WriteString(m.renderTabHeader() + "\n")
+	if m.searchMode {
+		prefix := lipgloss.NewStyle().Foreground(accent).Render("/ ")
+		b.WriteString(prefix + m.searchInput.View() + "\n")
+	}
 	if m.activeView == viewNotifications {
 		if status := m.renderSetupStatus(); status != "" {
 			b.WriteString(status + "\n")
@@ -643,8 +786,11 @@ func (m model) renderTabHeader() string {
 
 func (m model) renderNotificationsView() string {
 	var b strings.Builder
+	filtered := m.filteredEntries()
 	if len(m.entries) == 0 {
 		b.WriteString(dimStyle.Render("No pending notifications.") + "\n")
+	} else if len(filtered) == 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("No results for %q", m.searchQuery)) + "\n")
 	} else {
 		// Fixed overhead: 2 prefix + 12 status + 2 + 3 pin + 2 + 1 pop + 2 + 20 window + 2 + pathWidth + 2 + 14 session + 2 + 10 age = 74
 		pathWidth := max(10, m.termWidth()-74)
@@ -652,7 +798,7 @@ func (m model) renderNotificationsView() string {
 			"STATUS", "PIN", "P", "WINDOW", pathWidth, "PATH", "SESSION", "AGE")
 		b.WriteString(dimStyle.Render(header) + "\n")
 		b.WriteString(dimStyle.Render("  "+strings.Repeat("─", m.termWidth()-2)) + "\n")
-		for i, e := range m.entries {
+		for i, e := range filtered {
 			r := e.record
 			pinCol := "   "
 			if e.pinned {
@@ -697,13 +843,17 @@ func (m model) renderSessionsView() string {
 
 	if m.drillProject == "" {
 		// ── Level 1: projects table ──────────────────────────────────────────
-		rows := buildProjRows(m.sessionItems)
-		if len(rows) == 0 {
+		rows := buildProjRows(m.filteredSessions())
+		if len(m.sessionItems) == 0 {
 			msg := "No sessions discovered."
 			if m.filterActive {
 				msg = "No active sessions."
 			}
 			b.WriteString(dimStyle.Render(msg) + "\n")
+			return b.String()
+		}
+		if len(rows) == 0 {
+			b.WriteString(dimStyle.Render(fmt.Sprintf("No results for %q", m.searchQuery)) + "\n")
 			return b.String()
 		}
 		// Fixed overhead: 2 prefix + 12 status + 2 + 2 + 5 count + 2 + 10 age = 35
@@ -743,9 +893,11 @@ func (m model) renderSessionsView() string {
 	b.WriteString(titleStyle.Render("  ← "+m.drillProject) + "\n")
 	b.WriteString(dimStyle.Render("  "+strings.Repeat("─", min(runewidth.StringWidth(m.drillProject)+4, 50))) + "\n")
 
-	drilled := m.sessionsForDrill()
-	if len(drilled) == 0 {
+	drilled := m.filteredDrill()
+	if len(m.sessionsForDrill()) == 0 {
 		b.WriteString(dimStyle.Render("  No sessions.") + "\n")
+	} else if len(drilled) == 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  No results for %q", m.searchQuery)) + "\n")
 	} else {
 		header := fmt.Sprintf("  %-12s  %-3s  %-10s  %s", "STATUS", "PIN", "SESSION", "AGE")
 		b.WriteString(dimStyle.Render(header) + "\n")
