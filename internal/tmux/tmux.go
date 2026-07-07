@@ -78,6 +78,13 @@ func ClearPopStyle(paneID string) error {
 	return err
 }
 
+// IsPanePopped returns true when the pane currently has a pane-local window-style
+// set (i.e. the background pop is active).
+func IsPanePopped(paneID string) bool {
+	out, err := run("show-options", "-t", paneID, "-p", "window-style")
+	return err == nil && out != ""
+}
+
 // RegisterClearHook registers a global after-select-window hook that clears the
 // notification when the user switches to the notified window. pane-focus-in is
 // not used because it requires terminal focus event reporting (broken in WSL2).

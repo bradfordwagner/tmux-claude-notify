@@ -79,6 +79,7 @@ type entry struct {
 	pinned         bool   // true if backed by a pinned sessions record
 	sessionID      string // set when backed by sessions.jsonl (enables pin toggle)
 	isSessionEntry bool   // true = came from sessions.jsonl, not notifications.jsonl
+	popped         bool   // true when the pane currently has background pop active
 }
 
 // sessionEntry is a row in the Sessions view.
@@ -645,10 +646,10 @@ func (m model) renderNotificationsView() string {
 	if len(m.entries) == 0 {
 		b.WriteString(dimStyle.Render("No pending notifications.") + "\n")
 	} else {
-		// Fixed overhead: 2 prefix + 12 status + 2 + 3 pin + 2 + 20 window + 2 + 2 + 14 session + 2 + 10 age = 71
-		pathWidth := max(10, m.termWidth()-71)
-		header := fmt.Sprintf("  %-12s  %-3s  %-20s  %-*s  %-14s  %s",
-			"STATUS", "PIN", "WINDOW", pathWidth, "PATH", "SESSION", "AGE")
+		// Fixed overhead: 2 prefix + 12 status + 2 + 3 pin + 2 + 1 pop + 2 + 20 window + 2 + pathWidth + 2 + 14 session + 2 + 10 age = 74
+		pathWidth := max(10, m.termWidth()-74)
+		header := fmt.Sprintf("  %-12s  %-3s  %s  %-20s  %-*s  %-14s  %s",
+			"STATUS", "PIN", "P", "WINDOW", pathWidth, "PATH", "SESSION", "AGE")
 		b.WriteString(dimStyle.Render(header) + "\n")
 		b.WriteString(dimStyle.Render("  "+strings.Repeat("─", m.termWidth()-2)) + "\n")
 		for i, e := range m.entries {
@@ -664,17 +665,25 @@ func (m model) renderNotificationsView() string {
 				sep := bgs.Render("  ")
 				badge := renderStatusBadge(r.Status, selBg)
 				pin := bgs.Render(pinCol)
+				pop := bgs.Render(" ")
+				if e.popped {
+					pop = lipgloss.NewStyle().Foreground(accent).Background(selBg).Render("●")
+				}
 				win := bgs.Render(fmt.Sprintf("%-20s", r.WindowName))
 				ps := bgs.Render(path)
 				sess := bgs.Render(fmt.Sprintf("%-14s", r.Session))
 				age := bgs.Render(formatAge(r.TS))
 				ind := selectedStyle.Background(selBg).Render("> ")
-				innerW := 2 + 12 + 2 + runewidth.StringWidth(pinCol) + 2 + 20 + 2 + pathWidth + 2 + 14 + 2 + runewidth.StringWidth(formatAge(r.TS))
+				innerW := 2 + 12 + 2 + runewidth.StringWidth(pinCol) + 2 + 1 + 2 + 20 + 2 + pathWidth + 2 + 14 + 2 + runewidth.StringWidth(formatAge(r.TS))
 				pad := bgs.Render(strings.Repeat(" ", max(0, m.termWidth()-innerW)))
-				b.WriteString(ind+badge+sep+pin+sep+win+sep+ps+sep+sess+sep+age+pad+"\n")
+				b.WriteString(ind+badge+sep+pin+sep+pop+sep+win+sep+ps+sep+sess+sep+age+pad+"\n")
 			} else {
-				line := fmt.Sprintf("%s  %s  %-20s  %s  %-14s  %s",
-					renderStatusBadge(r.Status), pinCol, r.WindowName, path, r.Session, formatAge(r.TS))
+				popDisp := " "
+				if e.popped {
+					popDisp = lipgloss.NewStyle().Foreground(accent).Render("●")
+				}
+				line := fmt.Sprintf("%s  %s  %s  %-20s  %s  %-14s  %s",
+					renderStatusBadge(r.Status), pinCol, popDisp, r.WindowName, path, r.Session, formatAge(r.TS))
 				b.WriteString("  " + normalStyle.Render(line) + "\n")
 			}
 		}
@@ -932,7 +941,7 @@ func loadEntries() []entry {
 			sid = sr.SessionID
 			seenSession[sr.SessionID] = true
 		}
-		e := entry{record: r, Path: path, pinned: pinned, sessionID: sid}
+		e := entry{record: r, Path: path, pinned: pinned, sessionID: sid, popped: tmuxclient.IsPanePopped(r.Pane)}
 		if pinned {
 			notifPinned = append(notifPinned, e)
 		} else {

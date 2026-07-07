@@ -47,6 +47,7 @@ User invokes keybinding (C-M-p by default):
   ├─ sessions.ReadAll()      → merge active + pinned sessions into Notifications view
   └─ bubbletea TUI  (fsnotify auto-refresh; transcript watcher; Tab to switch views)
       ├─ Notifications view  (default): notifications + active sessions + pinned idle sessions
+      │   │   columns: STATUS | PIN | P (pop indicator ● when pane-local bg pop active) | WINDOW | PATH | SESSION | AGE
       │   ├─ enter: clear notification + SelectWindow + DetachIfShpell
       │   ├─ p: pin/unpin session via sessions.SetPinned
       │   └─ tab: switch to Sessions view
@@ -99,7 +100,7 @@ User invokes keybinding (C-M-p by default):
                                       poll every 2s (up to 4h):
                                       ├─ HasUnclearedPane? no → exit (cleared by other means)
                                       ├─ IsShpellOpen? yes → continue (dashboard handles it)
-                                      └─ window_active=1? yes → runClear (user navigated here)
+                                      └─ window_active=1? yes → sleep N seconds (grace period) → runClear
 
  Transcript watcher fires (while dashboard is open)
       │
@@ -185,7 +186,7 @@ cmd/claude-notify/main.go      binary entry point + subcommand routing
 internal/
   store/store.go               notifications.jsonl: Append, ReadAll, ClearPane, HasUnclearedPane, UpdateStatus, WindowForPane, UnclearedForWindow
   sessions/sessions.go         sessions.jsonl: SessionRecord, Upsert, ReadAll, SetPinned, Compact, DiscoverAll, RecoverPath
-  tmux/tmux.go                 tmux command helpers
+  tmux/tmux.go                 tmux command helpers (IsPanePopped: show-options -p window-style → pop indicator)
   setup/setup.go               ~/.claude/settings.json hook check + auto-configure
   watcher/watcher.go           transcript file watcher: state derivation, pane correlation, sessions.Upsert on discovery
   ui/model.go                  bubbletea dashboard TUI: Notifications + Sessions views, tab toggle, sort/filter/pin/resume

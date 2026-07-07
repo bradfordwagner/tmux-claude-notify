@@ -149,34 +149,39 @@ func runClear(paneID string) error {
 }
 
 // runAutoReset clears the notification once the user's window becomes focused.
-// If the pane was already focused at notify time, waits delaySecs before clearing.
-// Otherwise polls every 2 seconds (up to 4 hours) until the window is focused, then clears.
+// Both paths call clearAfterGracePeriod so the grace-period invariant is enforced
+// in one place — adding a new path must call it too.
 func runAutoReset(paneID string, delaySecs int) {
 	if tmuxclient.IsPaneFocused(paneID) {
-		// Pane is currently focused — original behavior: grace period, then clear.
-		time.Sleep(time.Duration(delaySecs) * time.Second)
-		if !tmuxclient.IsShpellOpen() {
-			if uncleared, _ := store.HasUnclearedPane(paneID); uncleared {
-				_ = runClear(paneID)
-			}
-		}
+		clearAfterGracePeriod(paneID, delaySecs)
 		return
 	}
-	// Pane not focused — poll until the user navigates here, then clear immediately.
 	const maxPoll = 4 * time.Hour
 	const pollInterval = 2 * time.Second
 	start := time.Now()
 	for time.Since(start) < maxPoll {
 		time.Sleep(pollInterval)
 		if uncleared, _ := store.HasUnclearedPane(paneID); !uncleared {
-			return // cleared by dashboard or transcript watcher
+			return
 		}
 		if tmuxclient.IsShpellOpen() {
-			continue // dashboard open — user handles it there
+			continue
 		}
 		if tmuxclient.IsPaneFocused(paneID) {
-			_ = runClear(paneID)
+			clearAfterGracePeriod(paneID, delaySecs)
 			return
+		}
+	}
+}
+
+// clearAfterGracePeriod sleeps delaySecs then clears the notification if it is
+// still uncleared and the dashboard is not open. All auto-reset paths must call
+// this — never inline the sleep+clear logic in a new branch.
+func clearAfterGracePeriod(paneID string, delaySecs int) {
+	time.Sleep(time.Duration(delaySecs) * time.Second)
+	if !tmuxclient.IsShpellOpen() {
+		if uncleared, _ := store.HasUnclearedPane(paneID); uncleared {
+			_ = runClear(paneID)
 		}
 	}
 }

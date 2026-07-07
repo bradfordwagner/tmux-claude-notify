@@ -51,7 +51,7 @@ The TUI SHALL have a Notifications view (default) and a Sessions view. Pressing 
 - **THEN** the Notifications view becomes active
 
 ### Requirement: Dashboard renders agent status per entry in Notifications view
-Each Notifications view entry SHALL display STATUS (icon + text), PIN (📌 or blank), WINDOW name, PATH (last two components, `~`-abbreviated, max 25 visual columns), SESSION name, and AGE. The raw pane ID SHALL NOT appear. A header row and separator SHALL appear above the entry list when entries are present.
+Each Notifications view entry SHALL display STATUS (icon + text), PIN (📌 or blank), POP indicator (● or blank), WINDOW name, PATH (last two components, `~`-abbreviated, dynamic width), SESSION name, and AGE. The raw pane ID SHALL NOT appear. A header row and separator SHALL appear above the entry list when entries are present.
 
 #### Scenario: Waiting entry styled with accent color
 - **WHEN** an entry has `status: waiting`
@@ -67,11 +67,22 @@ Each Notifications view entry SHALL display STATUS (icon + text), PIN (📌 or b
 
 #### Scenario: Column headers rendered above entries
 - **WHEN** one or more entries are displayed
-- **THEN** a header row "STATUS  PIN  WINDOW  PATH  SESSION  AGE" and separator appear above the first entry
+- **THEN** a header row "STATUS  PIN  P  WINDOW  PATH  SESSION  AGE" and separator appear above the first entry
 
 #### Scenario: Path column shows pane working directory
 - **WHEN** an entry is rendered
 - **THEN** the PATH column shows the pane's current directory, truncated to the last two components with `$HOME` replaced by `~`
+
+#### Scenario: Pop indicator shows pane background pop state
+- **WHEN** an entry's pane has an active pane-local background pop (`window-style` set via `set-option -p`)
+- **THEN** the P column renders `●` in the accent color (`#AD8EE6`)
+- **WHEN** the pane has no active pop
+- **THEN** the P column renders a blank space
+
+#### Scenario: Pop indicator queried at load time
+- **WHEN** the Notifications view loads entries from `notifications.jsonl`
+- **THEN** `IsPanePopped(paneID)` is called for each notification-backed entry to set the pop flag
+- **AND** the flag is used for display only (not persisted)
 
 ### Requirement: Dashboard auto-refreshes on transcript state change
 When the transcript watcher detects a state change while the dashboard is open, the dashboard SHALL re-render within one bubbletea event loop tick without user interaction.

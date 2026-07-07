@@ -4,6 +4,15 @@
 
 When a Claude notification fires on the currently focused pane (the user is already looking at it), the visual pop auto-clears after a configurable delay rather than persisting indefinitely. This avoids stale highlights for panes the user is actively watching. Non-focused panes are unaffected and continue to require explicit dashboard dismissal.
 
+## Invariants
+
+These properties must hold across all auto-reset paths. Any new scenario that violates them is wrong.
+
+1. **Grace period always applies before auto-clear.** No auto-reset path clears a notification without first sleeping `delaySecs` seconds. This applies whether the pane was focused at notify time or the user navigated to it later.
+2. **Dashboard open → no auto-clear.** If `IsShpellOpen()` is true when the grace period ends, the subprocess exits without touching the store or tmux styles. The dashboard handles it.
+3. **Already cleared → no-op.** If `HasUnclearedPane` returns false at any check point, the subprocess exits immediately without side effects.
+4. **Grace period is enforced in one place.** `clearAfterGracePeriod(paneID, delaySecs)` is the single implementation of sleep+check+clear. All paths in `runAutoReset` call it — never inline this logic in a new branch.
+
 ## Requirements
 
 ### Requirement: Auto-reset subprocess is always spawned when a notification fires
@@ -20,16 +29,16 @@ When `claude-notify notify` is invoked and `@claude-notify-active-reset-seconds`
 - **AND** `tmux display-message -t $TMUX_PANE -p "#{window_active}"` returns `1`
 - **THEN** the subprocess sleeps N seconds (grace period), then clears the notification if still uncleared and popup is not open
 
-#### Scenario: Inactive window at notify time — poll for focus then clear
+#### Scenario: Inactive window at notify time — poll for focus, then grace period, then clear
 - **WHEN** `claude-notify notify` is invoked
 - **AND** the window is not the user's current window (`window_active = 0`)
 - **THEN** the subprocess polls `window_active` every 2 seconds (up to 4 hours)
-- **AND** when `window_active=1` is first detected, clears the notification immediately (if still uncleared and popup not open)
+- **AND** when `window_active=1` is first detected, sleeps N seconds (grace period), then clears the notification (if still uncleared and popup not open)
 
-#### Scenario: User navigates to popped pane via tmux — auto-clears
+#### Scenario: User navigates to popped pane via tmux — grace period then auto-clears
 - **WHEN** a notification is set on a pane in an inactive window
 - **AND** the user switches to that window using tmux (not the dashboard)
-- **THEN** the auto-reset subprocess detects focus and clears the pop within 2 seconds
+- **THEN** the auto-reset subprocess detects focus, waits N seconds, then clears the pop
 
 #### Scenario: Auto-reset disabled via option — no subprocess
 - **WHEN** `@claude-notify-active-reset-seconds` is set to `0`
