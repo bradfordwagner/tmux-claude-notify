@@ -8,7 +8,9 @@ The indicator stays until you acknowledge it — no timeout, no auto-dismiss.
 
 - **Tab highlight** — the tmux window tab turns purple (`#AD8EE6`) when claude is waiting for input
 - **Pane background pop** — the pane background changes color to draw your eye (configurable)
-- **Dashboard** — a bubbletea TUI listing all pending notifications with session, window, status, and age
+- **Dashboard** — a bubbletea TUI with two views: a Notifications view (pending notifications) and a Sessions view (all discovered Claude sessions, browseable and resumable)
+- **Fuzzy search** — press `/` in the dashboard to filter any view in real time
+- **Session browser** — two-level drill-in (projects → sessions) with pin, filter, and open/resume via `w`/`h`/`v`
 - **Desktop notification** — fires `notify-send` if available (Linux/WSL)
 - **Transcript watcher** — reads Claude Code's own JSONL session files to derive richer state (`running`, `waiting`, `stale`) in near-realtime while the dashboard is open
 - **Reconciliation** — on dashboard open, corrects any stale notifications from while the dashboard was closed
@@ -44,7 +46,9 @@ git clone https://github.com/bradfordwagner/tmux-claude-notify \
 
 ## Hook setup
 
-The plugin auto-configures `~/.claude/settings.json` on first dashboard open. To configure manually:
+No manual action required. On first dashboard open, `claude-notify` automatically adds the `Stop` hook to `~/.claude/settings.json` and shows a brief toast confirmation.
+
+For dotfile-managed setups (Ansible, chezmoi, etc.), the hook entry looks like:
 
 ```json
 {
@@ -58,14 +62,39 @@ Replace `/path/to/bin/claude-notify` with the actual path (e.g. `~/.tmux/plugins
 
 ## Usage
 
-Press `C-M-p` (default) to open the notification dashboard. Select an entry with enter to jump to that window and clear the notification.
+Press `C-M-p` (default) to open the notification dashboard.
+
+### Notifications view (default)
 
 | Action | Result |
 |---|---|
 | Claude finishes a response | Tab highlights; pane background changes |
 | Press `C-M-p` | Dashboard opens showing all pending notifications |
-| Select an entry (enter) | Switches to that window, clears the notification, closes popup |
+| `enter` on an entry | Switches to that window, clears the notification, closes popup |
 | `q` / `esc` | Close dashboard without clearing |
+| `/` | Enter search mode — fuzzy-filter the list in real time |
+| `Tab` (in search) | Toggle keyboard focus between the filter input and the table |
+
+### Sessions view
+
+Press `Tab` to switch between the Notifications view and the Sessions view. The Sessions view is a two-level browser: Level-1 lists projects, Level-2 lists individual sessions within a project.
+
+| Action | Result |
+|---|---|
+| `Tab` | Toggle between Notifications and Sessions views |
+| `enter` (L1) | Drill into a project's session list (Level-2) |
+| `esc` (L2) | Return to Level-1 |
+| `esc` (L1) / `q` | Close dashboard |
+| `p` (L2) | Toggle pin on the selected session |
+| `f` | Toggle filter: show only sessions with an active tmux pane |
+| `w` (L1) | Open a new `claude` session in the selected project (new window) |
+| `h` / `v` (L1) | Open a new `claude` session in a horizontal/vertical split |
+| `w` (L2, closed session) | Resume the session with `claude --resume <id>` in a new window |
+| `h` / `v` (L2, closed session) | Resume in a horizontal/vertical split |
+| `w` (L2, active session) | Focus the session's existing pane and close the popup |
+| `/` | Fuzzy-filter the session list |
+
+Pinned sessions (`p`) float to the top of the Sessions view and also appear in the Notifications view even when their pane is not active.
 
 ## Configuration
 
