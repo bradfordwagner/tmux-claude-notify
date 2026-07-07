@@ -1,19 +1,4 @@
-# Spec: auto-reset-active-pane
-
-## Purpose
-
-When a Claude notification fires on the currently focused pane (the user is already looking at it), the visual pop auto-clears after a configurable delay rather than persisting indefinitely. This avoids stale highlights for panes the user is actively watching. Non-focused panes are unaffected and continue to require explicit dashboard dismissal.
-
-## Invariants
-
-These properties must hold across all auto-reset paths. Any new scenario that violates them is wrong.
-
-1. **Grace period always applies before auto-clear.** No auto-reset path clears a notification without first sleeping `delaySecs` seconds. This applies whether the pane was focused at notify time or the user navigated to it later.
-2. **Dashboard open → no auto-clear.** If `IsShpellOpen()` is true when the grace period ends, the subprocess exits without touching the store or tmux styles. The dashboard handles it.
-3. **Already cleared → no-op.** If `HasUnclearedPane` returns false at any check point, the subprocess exits immediately without side effects.
-4. **Grace period is enforced in one place.** `clearAfterGracePeriod(paneID, delaySecs)` is the single implementation of sleep+check+clear. All paths in `runAutoReset` call it — never inline this logic in a new branch.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Auto-reset subprocess is always spawned when a notification fires
 When `claude-notify notify` is invoked and at least one of `@claude-notify-active-reset-seconds` or `@claude-notify-nav-clear-seconds` is non-zero, the binary SHALL always fork a detached subprocess (`claude-notify auto-reset --pane <id> --delay <N> --nav-delay <M>`), regardless of whether the notified pane's window is currently active. The subprocess behavior differs based on whether the window is focused at notify time (see below). If both options are `0`, auto-reset is disabled entirely.
@@ -53,34 +38,6 @@ When `claude-notify notify` is invoked and at least one of `@claude-notify-activ
 - **AND** `@claude-notify-nav-clear-seconds` is set to `0`
 - **THEN** no auto-reset subprocess is spawned regardless of pane focus state
 
-### Requirement: Auto-reset subprocess clears notification after delay
-The `claude-notify auto-reset` subcommand SHALL sleep for the specified delay, then check two conditions before clearing: (1) the JSONL entry for the given pane is still uncleared, and (2) the dashboard popup (`_shpell-session`) is NOT currently open. If either check fails, the subprocess exits without modifying the store or tmux styles. If both conditions are met, it SHALL call `ClearPane` on the store, then call `store.UnclearedForWindow(windowID)` — only if that returns empty SHALL it unset `window-status-style` and `window-status-current-style` on the window. The pane background pop SHALL always be cleared per-pane via `set-option -t <paneID> -p -u window-style` regardless of sibling notifications.
-
-#### Scenario: Entry still uncleared and popup closed — cleared automatically
-- **WHEN** the auto-reset subprocess wakes after N seconds
-- **AND** the store still has an uncleared entry for the pane
-- **AND** `tmux.IsShpellOpen()` returns `false`
-- **THEN** `ClearPane` is called, removing the JSONL entry
-- **AND** `set-option -t <paneID> -p -u window-style` is called to clear the pane background pop
-- **AND** if no other uncleared entries remain for the same window, `window-status-style` and `window-status-current-style` are unset via `set-option -u`
-- **AND** if sibling panes in the same window still have uncleared entries, window tab styles are NOT cleared
-
-#### Scenario: Entry still uncleared but popup is open — skipped
-- **WHEN** the auto-reset subprocess wakes after N seconds
-- **AND** the store still has an uncleared entry for the pane
-- **AND** `tmux.IsShpellOpen()` returns `true`
-- **THEN** the subprocess exits without touching the JSONL store or tmux styles
-
-#### Scenario: Entry already cleared before delay — no-op
-- **WHEN** the auto-reset subprocess wakes after N seconds
-- **AND** the pane entry was already cleared (user dismissed via dashboard or transcript watcher)
-- **THEN** the subprocess exits without touching tmux styles or the JSONL store
-
-#### Scenario: Auto-reset subprocess is detached — no zombie processes
-- **WHEN** the auto-reset subprocess is forked
-- **THEN** it runs in a new session (`Setsid: true`) with stdin/stdout/stderr closed
-- **AND** the parent notify process does not wait for it
-
 ### Requirement: Auto-reset delay is configurable via TPM options
 The active-reset delay SHALL be read from `@claude-notify-active-reset-seconds` (default `15`). The navigate-to-clear delay SHALL be read from `@claude-notify-nav-clear-seconds` (default `2`). Both are passed to the subprocess as `--delay` and `--nav-delay` respectively. Setting either to `0` disables its respective clear path.
 
@@ -95,11 +52,6 @@ The active-reset delay SHALL be read from `@claude-notify-active-reset-seconds` 
 #### Scenario: Option set to custom value
 - **WHEN** `set -g @claude-notify-active-reset-seconds 30` is in `tmux.conf`
 - **THEN** the active-reset delay is 30 seconds
-
-#### Scenario: active-reset option set to 0 — active-reset path disabled
-- **WHEN** `set -g @claude-notify-active-reset-seconds 0` is in `tmux.conf`
-- **THEN** the already-focused clear path does not clear the notification
-- **AND** the nav-clear path is unaffected (subprocess still spawns if nav-clear is non-zero)
 
 #### Scenario: nav-clear option set to 0 — navigate-to-clear disabled
 - **WHEN** `set -g @claude-notify-nav-clear-seconds 0` is in `tmux.conf`
