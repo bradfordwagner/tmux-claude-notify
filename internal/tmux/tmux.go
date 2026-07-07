@@ -164,13 +164,13 @@ func DetachIfShpell() error {
 	return nil
 }
 
-// IsPaneFocused returns true when the window containing the given pane is the
-// user's currently active window. Checking window_active alone (rather than
-// also requiring pane_active) means auto-reset fires whenever the user is in
-// the same window, even if a different split pane is focused.
+// IsPaneFocused returns true when the given pane is the user's currently active
+// pane (both its window is active and the pane itself is selected). Checking
+// both window_active and pane_active ensures split-pane navigation triggers
+// auto-reset correctly — a sibling pane in the same window does not count.
 func IsPaneFocused(paneID string) bool {
-	out, err := run("display-message", "-t", paneID, "-p", "#{window_active}")
-	return err == nil && out == "1"
+	out, err := run("display-message", "-t", paneID, "-p", "#{window_active}#{pane_active}")
+	return err == nil && out == "11"
 }
 
 // IsShpellOpen returns true when the grimoire shpell popup session is live,
@@ -183,10 +183,23 @@ func IsShpellOpen() bool {
 // ActiveResetSeconds reads @claude-notify-active-reset-seconds from global tmux
 // options. Returns 15 if unset, 0 if explicitly "0" (disables auto-reset).
 func ActiveResetSeconds() int {
-	val, _ := run("show-option", "-gqv", "@claude-notify-active-reset-seconds")
+	return readSecondsOption("@claude-notify-active-reset-seconds", 15)
+}
+
+// NavClearSeconds reads @claude-notify-nav-clear-seconds from global tmux options.
+// Returns 2 if unset, 0 if explicitly "0" (disables navigate-to-clear).
+func NavClearSeconds() int {
+	return readSecondsOption("@claude-notify-nav-clear-seconds", 2)
+}
+
+// readSecondsOption reads a tmux global option that holds an integer number of
+// seconds. Returns defaultVal if the option is unset or empty, 0 if set to "0",
+// defaultVal if the value is not a valid non-negative integer.
+func readSecondsOption(option string, defaultVal int) int {
+	val, _ := run("show-option", "-gqv", option)
 	val = strings.TrimSpace(val)
 	if val == "" {
-		return 15
+		return defaultVal
 	}
 	if val == "0" {
 		return 0
@@ -195,7 +208,7 @@ func ActiveResetSeconds() int {
 	n := 0
 	for _, c := range val {
 		if c < '0' || c > '9' {
-			return 15
+			return defaultVal
 		}
 		n = n*10 + int(c-'0')
 	}

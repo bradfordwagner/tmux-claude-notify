@@ -43,6 +43,7 @@ func main() {
 	case "auto-reset":
 		paneID := ""
 		delaySecs := 15
+		navDelaySecs := 2
 		args := os.Args[2:]
 		for i, arg := range args {
 			if arg == "--pane" && i+1 < len(args) {
@@ -53,11 +54,16 @@ func main() {
 					delaySecs = n
 				}
 			}
+			if arg == "--nav-delay" && i+1 < len(args) {
+				if n, err := strconv.Atoi(args[i+1]); err == nil {
+					navDelaySecs = n
+				}
+			}
 		}
 		if paneID == "" {
 			os.Exit(0)
 		}
-		runAutoReset(paneID, delaySecs)
+		runAutoReset(paneID, delaySecs, navDelaySecs)
 	default:
 		if err := ui.Run(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -113,10 +119,12 @@ func runNotify() error {
 	}
 
 	// Fork a detached subprocess to auto-clear the notification.
-	// If the pane is already focused, it clears after delaySecs (grace period).
-	// If not focused, it polls until the user navigates to the pane, then clears.
-	if delaySecs := tmuxclient.ActiveResetSeconds(); delaySecs > 0 {
-		_ = forkAutoReset(paneID, delaySecs)
+	// If the pane is already focused, it clears after delaySecs (active-reset grace period).
+	// If not focused, it polls until the user navigates to the pane, then clears after navDelaySecs.
+	delaySecs := tmuxclient.ActiveResetSeconds()
+	navDelaySecs := tmuxclient.NavClearSeconds()
+	if delaySecs > 0 || navDelaySecs > 0 {
+		_ = forkAutoReset(paneID, delaySecs, navDelaySecs)
 	}
 
 	return nil
@@ -149,11 +157,14 @@ func runClear(paneID string) error {
 }
 
 // runAutoReset clears the notification once the user's window becomes focused.
+// delaySecs governs the already-focused path; navDelaySecs governs the poll-detected path.
 // Both paths call clearAfterGracePeriod so the grace-period invariant is enforced
 // in one place — adding a new path must call it too.
-func runAutoReset(paneID string, delaySecs int) {
+func runAutoReset(paneID string, delaySecs, navDelaySecs int) {
 	if tmuxclient.IsPaneFocused(paneID) {
-		clearAfterGracePeriod(paneID, delaySecs)
+		if delaySecs > 0 {
+			clearAfterGracePeriod(paneID, delaySecs)
+		}
 		return
 	}
 	const maxPoll = 4 * time.Hour
@@ -168,7 +179,9 @@ func runAutoReset(paneID string, delaySecs int) {
 			continue
 		}
 		if tmuxclient.IsPaneFocused(paneID) {
-			clearAfterGracePeriod(paneID, delaySecs)
+			if navDelaySecs > 0 {
+				clearAfterGracePeriod(paneID, navDelaySecs)
+			}
 			return
 		}
 	}
@@ -188,12 +201,17 @@ func clearAfterGracePeriod(paneID string, delaySecs int) {
 
 // forkAutoReset spawns a detached background process to run auto-reset.
 // The parent returns immediately; the child sleeps and clears.
-func forkAutoReset(paneID string, delaySecs int) error {
+func forkAutoReset(paneID string, delaySecs, navDelaySecs int) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	args := []string{exe, "auto-reset", "--pane", paneID, "--delay", strconv.Itoa(delaySecs)}
+	args := []string{
+		exe, "auto-reset",
+		"--pane", paneID,
+		"--delay", strconv.Itoa(delaySecs),
+		"--nav-delay", strconv.Itoa(navDelaySecs),
+	}
 	proc, err := os.StartProcess(exe, args, &os.ProcAttr{
 		Files: []*os.File{nil, nil, nil},
 		Sys:   &syscall.SysProcAttr{Setsid: true},

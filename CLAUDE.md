@@ -61,7 +61,7 @@ When the dashboard TUI starts, it launches a transcript watcher that reads Claud
 
 On startup, `watcher.Reconcile()` scans all active transcripts and corrects any JSONL entries that changed while the dashboard was closed (e.g., clears entries where the user already responded via the Stop-hook period).
 
-Notifications are cleared explicitly by selecting them in the dashboard — there is no auto-clear hook (pane-focus-in is broken in WSL2; after-select-window fires on any tmux command).
+Notifications are cleared in three ways: (1) selecting them in the dashboard, (2) the auto-reset subprocess clearing after `@claude-notify-active-reset-seconds` (default 15s) when the notified pane was already focused at notify time, or (3) the same subprocess clearing after `@claude-notify-nav-clear-seconds` (default 2s) when the user navigates to the notified pane. The subprocess polls `#{window_active}#{pane_active}` every 2s to detect pane-level focus — pane-focus-in hooks are not used (broken in WSL2; after-select-window fires on any tmux command).
 
 ### Claude Code hook setup (in ~/.claude/settings.json)
 

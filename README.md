@@ -13,6 +13,7 @@ The indicator stays until you acknowledge it — no timeout, no auto-dismiss.
 - **Session browser** — two-level drill-in (projects → sessions) with pin, filter, and open/resume via `w`/`h`/`v`
 - **Desktop notification** — fires `notify-send` if available (Linux/WSL)
 - **Transcript watcher** — reads Claude Code's own JSONL session files to derive richer state (`running`, `waiting`, `stale`) in near-realtime while the dashboard is open
+- **Auto-clear on navigation** — navigating to a popped pane clears it automatically after `@claude-notify-nav-clear-seconds` (default 2s); no dashboard interaction needed
 - **Reconciliation** — on dashboard open, corrects any stale notifications from while the dashboard was closed
 - **Auto-configures** — wires Claude Code hooks into `~/.claude/settings.json` on first launch
 
@@ -103,7 +104,8 @@ Pinned sessions (`p`) float to the top of the Sessions view and also appear in t
 | `@claude-notify-key` | `C-M-p` | Keybinding to open the dashboard |
 | `@claude-notify-pop-color` | `#1e1e2e` | Pane background color when waiting (falls back to `@tmux-pop-color`, then `#1e1e2e`) |
 | `@claude-notify-stale-minutes` | `5` | Minutes of transcript inactivity before marking a session stale |
-| `@claude-notify-active-reset-seconds` | `15` | Seconds before auto-clearing a notification when the notified pane is already focused. Set to `0` to disable auto-reset. |
+| `@claude-notify-active-reset-seconds` | `15` | Seconds before auto-clearing a notification when the notified pane is already focused. Set to `0` to disable. |
+| `@claude-notify-nav-clear-seconds` | `2` | Seconds before auto-clearing a notification when you navigate to its window via tmux. Set to `0` to disable. |
 
 ## Grimoire integration
 
