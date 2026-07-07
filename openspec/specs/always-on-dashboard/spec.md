@@ -35,20 +35,58 @@ On startup, after loading the JSONL notification log, the dashboard SHALL scan a
 - **WHEN** the JSONL store has an uncleared entry for a pane but no matching transcript file is found
 - **THEN** the entry is left unchanged (Stop hook wrote it; treated as valid waiting state)
 
-### Requirement: Dashboard has two views toggled by Tab
-The TUI SHALL have a Notifications view (default) and a Sessions view. Pressing `Tab` cycles between them. The active view is shown in a header bar with the active tab highlighted in the accent color (`#AD8EE6`) and the inactive tab dimmed.
+### Requirement: `Tab` toggles between input focus and table focus when searching; switches views when not searching
+When `searchMode` is `false`, `Tab` switches between Notifications and Sessions views (existing behavior). When `searchMode` is `true`, `Tab` toggles `searchFocus` between `true` (input has keyboard) and `false` (table has keyboard) without switching views or clearing the filter.
 
-#### Scenario: Default view is Notifications
-- **WHEN** the dashboard opens
-- **THEN** the Notifications view is active and "[ Notifications ]" is highlighted in the header
+#### Scenario: Tab switches view when not in search mode
+- **WHEN** `searchMode` is `false` and the user presses `Tab`
+- **THEN** the active view switches between Notifications and Sessions
 
-#### Scenario: Tab switches to Sessions view
-- **WHEN** the user presses `Tab` while in Notifications view
-- **THEN** the Sessions view becomes active and "[ Sessions ]" is highlighted
+#### Scenario: Tab from input-focused moves focus to table
+- **WHEN** `searchMode` is `true`, `searchFocus` is `true`, and the user presses `Tab`
+- **THEN** `searchFocus` becomes `false` and the filter stays active
 
-#### Scenario: Tab switches back to Notifications view
-- **WHEN** the user presses `Tab` while in Sessions view
-- **THEN** the Notifications view becomes active
+#### Scenario: Tab from table-focused returns focus to input
+- **WHEN** `searchMode` is `true`, `searchFocus` is `false`, and the user presses `Tab`
+- **THEN** `searchFocus` becomes `true` and the textinput is focused
+
+### Requirement: `esc` key closes the dashboard or navigates back
+The `esc` key SHALL first exit search mode if active (`searchMode=true`). Only when `searchMode` is already `false` does `esc` perform its normal action (back-navigate in Sessions L2, or quit).
+
+#### Scenario: esc quits from Notifications view when not in search mode
+- **WHEN** `searchMode` is `false` and `activeView` is `viewNotifications` and the user presses `esc`
+- **THEN** the dashboard closes
+
+#### Scenario: esc back-navigates from Sessions L2 when not in search mode
+- **WHEN** `searchMode` is `false` and `drillProject` is non-empty and the user presses `esc`
+- **THEN** `drillProject` is cleared and the view returns to L1
+
+#### Scenario: esc exits search mode
+- **WHEN** `searchMode` is `true` (either `searchFocus` state) and the user presses `esc`
+- **THEN** `searchMode` and `searchFocus` become `false` and `searchQuery` is cleared
+- **AND** the dashboard does not quit and navigation does not change
+
+### Requirement: `/` key is handled in both views to enter search mode
+The TUI key handler SHALL intercept `/` in Notifications view and Sessions view (both levels) and delegate to the dashboard-search capability.
+
+#### Scenario: / handled in Notifications view
+- **WHEN** `searchMode` is `false` and the user presses `/` in Notifications view
+- **THEN** `searchMode` and `searchFocus` are set to `true` and the filter input is initialized and focused
+
+#### Scenario: / handled in Sessions view
+- **WHEN** `searchMode` is `false` and the user presses `/` in Sessions view (L1 or L2)
+- **THEN** `searchMode` and `searchFocus` are set to `true` and the filter input is initialized and focused
+
+### Requirement: Alphanumeric keys route to the filter input only when input-focused
+When `searchMode` is `true` and `searchFocus` is `true`, any key not otherwise intercepted SHALL be forwarded to `textinput.Update` and `searchQuery` updated. When `searchFocus` is `false`, all normal action keys are active.
+
+#### Scenario: Printable keys routed to filter input when input-focused
+- **WHEN** `searchMode` is `true`, `searchFocus` is `true`, and the user presses any printable key that is not an action key
+- **THEN** the keystroke is forwarded to `textinput.Update` and `searchQuery` is updated
+
+#### Scenario: Action keys active when table-focused
+- **WHEN** `searchMode` is `true`, `searchFocus` is `false`, and the user presses an action key (j/k/p/w/h/v/enter/q/s/f)
+- **THEN** the action fires normally on the filtered list
 
 ### Requirement: Dashboard renders agent status per entry in Notifications view
 Each Notifications view entry SHALL display STATUS (icon + text), PIN (📌 or blank), POP indicator (● or blank), WINDOW name, PATH (last two components, `~`-abbreviated, dynamic width), SESSION name, and AGE. The raw pane ID SHALL NOT appear. A header row and separator SHALL appear above the entry list when entries are present.
@@ -96,7 +134,7 @@ When the transcript watcher detects a state change while the dashboard is open, 
 - **THEN** `store.ClearPane` is called and the entry is removed from the dashboard
 
 ### Requirement: Sessions view is a two-level drill-in table
-The Sessions view SHALL display a Level-1 projects table (one row per project, plus "📌 Pinned" group). `enter` on a project row drills into Level-2 (session rows for that project). `esc` in Level-2 returns to Level-1; `esc` in Level-1 quits the dashboard.
+The Sessions view SHALL display a Level-1 projects table (one row per project, plus "📌 Pinned" group). `enter` on a project row drills into Level-2 (session rows for that project). Navigation back and quit behavior is governed by the `esc key closes the dashboard or navigates back` requirement.
 
 #### Scenario: Level-1 shows one row per project
 - **WHEN** the Sessions view is activated
@@ -105,14 +143,6 @@ The Sessions view SHALL display a Level-1 projects table (one row per project, p
 #### Scenario: enter on Level-1 row drills in
 - **WHEN** the user presses `enter` on a project row
 - **THEN** Level-2 shows session rows for that project
-
-#### Scenario: esc in Level-2 returns to Level-1
-- **WHEN** the user presses `esc` while in Level-2
-- **THEN** the view returns to Level-1
-
-#### Scenario: esc in Level-1 quits
-- **WHEN** the user presses `esc` while in Level-1
-- **THEN** the dashboard closes
 
 ### Requirement: `s` key cycles sort in Sessions view
 Pressing `s` in the Sessions view SHALL cycle the sort field between `age` (default, most recently active first) and `status` (most urgent first). The active sort field is shown in the tab header. Pinned sessions always float above unpinned within any sort order.
