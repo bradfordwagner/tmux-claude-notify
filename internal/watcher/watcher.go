@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+
+	"github.com/bradfordwagner/tmux-claude-notify/internal/sessions"
 )
 
 const tailN = 20
@@ -96,7 +98,10 @@ func (w *Watcher) Close() {
 // Reconcile scans active transcripts and returns the current state for each
 // tracked pane. Call this on dashboard open to correct stale JSONL entries.
 func (w *Watcher) Reconcile() []StateChange {
-	w.discover()
+	panes, _ := listClaudePanes()
+	w.discoverWithPanes(panes)
+	clearInactivePaneSessions(panes)
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	var changes []StateChange
@@ -132,15 +137,22 @@ func (w *Watcher) run() {
 }
 
 func (w *Watcher) discover() {
-	panes, err := listClaudePanes()
-	if err != nil {
-		return
-	}
+	panes, _ := listClaudePanes()
+	w.discoverWithPanes(panes)
+}
+
+func (w *Watcher) discoverWithPanes(panes []claudePane) {
 	home, _ := os.UserHomeDir()
 	projectsDir := filepath.Join(home, ".claude", "projects")
 
+	// Collect upsert data outside the lock to avoid holding it during disk writes.
+	var toAdd []struct {
+		ps         paneState
+		transcript string
+	}
+	var toUpsert []sessions.SessionRecord
+
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	for _, p := range panes {
 		encoded := encodeProjectPath(p.currentPath)
 		dir := filepath.Join(projectsDir, encoded)
@@ -148,16 +160,70 @@ func (w *Watcher) discover() {
 		if transcript == "" {
 			continue
 		}
-		if _, exists := w.panes[transcript]; exists {
-			continue
+		if _, exists := w.panes[transcript]; !exists {
+			toAdd = append(toAdd, struct {
+				ps         paneState
+				transcript string
+			}{
+				ps: paneState{
+					paneID:     p.paneID,
+					windowID:   p.windowID,
+					session:    p.session,
+					transcript: transcript,
+				},
+				transcript: transcript,
+			})
 		}
-		w.panes[transcript] = &paneState{
-			paneID:     p.paneID,
-			windowID:   p.windowID,
-			session:    p.session,
-			transcript: transcript,
+		sessionID := strings.TrimSuffix(filepath.Base(transcript), ".jsonl")
+		status, _ := deriveStatusFromFile(transcript)
+		toUpsert = append(toUpsert, sessions.SessionRecord{
+			SessionID:    sessionID,
+			EncodedPath:  encoded,
+			ProjectPath:  p.currentPath,
+			PaneID:       p.paneID,
+			WindowID:     p.windowID,
+			WindowName:   p.windowName,
+			TmuxSession:  p.session,
+			LastActivity: time.Now().UnixNano(),
+			Status:       string(status),
+		})
+	}
+	for _, item := range toAdd {
+		w.panes[item.transcript] = &paneState{
+			paneID:     item.ps.paneID,
+			windowID:   item.ps.windowID,
+			session:    item.ps.session,
+			transcript: item.transcript,
 		}
-		_ = w.fw.Add(transcript)
+		_ = w.fw.Add(item.transcript)
+	}
+	w.mu.Unlock()
+
+	for _, sr := range toUpsert {
+		_ = sessions.Upsert(sr)
+	}
+}
+
+// clearInactivePaneSessions clears pane fields in sessions.jsonl for any session
+// whose PaneID is no longer in the set of currently active panes.
+func clearInactivePaneSessions(activePanes []claudePane) {
+	active := make(map[string]bool, len(activePanes))
+	for _, p := range activePanes {
+		active[p.paneID] = true
+	}
+	all, err := sessions.ReadAll()
+	if err != nil {
+		return
+	}
+	for _, sr := range all {
+		if sr.PaneID != "" && !active[sr.PaneID] {
+			sr.PaneID = ""
+			sr.WindowID = ""
+			sr.WindowName = ""
+			sr.TmuxSession = ""
+			sr.Status = "idle"
+			_ = sessions.Upsert(sr)
+		}
 	}
 }
 
@@ -202,30 +268,36 @@ func (w *Watcher) emit(sc StateChange) {
 type claudePane struct {
 	paneID      string
 	windowID    string
+	windowName  string
 	session     string
 	currentPath string
 }
 
 func listClaudePanes() ([]claudePane, error) {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{pane_id}\t#{window_id}\t#{session_name}\t#{pane_current_path}\t#{pane_current_command}").Output()
+		"#{pane_id}\t#{window_id}\t#{session_name}\t#{pane_current_path}\t#{pane_current_command}\t#{window_name}").Output()
 	if err != nil {
 		return nil, err
 	}
 	var panes []claudePane
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, "\t", 5)
-		if len(parts) != 5 {
+		parts := strings.SplitN(line, "\t", 6)
+		if len(parts) < 5 {
 			continue
 		}
 		if !strings.HasPrefix(parts[4], "claude") {
 			continue
+		}
+		windowName := ""
+		if len(parts) == 6 {
+			windowName = parts[5]
 		}
 		panes = append(panes, claudePane{
 			paneID:      parts[0],
 			windowID:    parts[1],
 			session:     parts[2],
 			currentPath: parts[3],
+			windowName:  windowName,
 		})
 	}
 	return panes, nil
