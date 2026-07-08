@@ -88,10 +88,10 @@ $TMUX         # socket path — confirms we're inside a tmux session
 ```
 Your session (e.g. "main")
 ├── window 0: vim                  ← normal work
-└── window: claude-notify          ← placeholder window (swapped in while popup is open)
+└── window: cn                     ← placeholder window (swapped in while popup is open)
 
 _shpell-session                    ← temporary session, lives only while popup is open
-└── window: claude-notify          ← where bin/claude-notify actually runs
+└── window: cn                     ← where bin/claude-notify actually runs
     └── pane                       ← bubbletea TUI renders here
 
 [display-popup overlay]            ← what you see: attaches to _shpell-session
@@ -103,14 +103,14 @@ The window is swapped between `_shpell-session` and your session via `tmux swap-
 
 ```bash
 # While shpell popup is open — reads the live TUI output:
-tmux capture-pane -t "_shpell-session:claude-notify" -p
+tmux capture-pane -t "_shpell-session:cn" -p
 
 # From your own session when popup is closed — reads the placeholder window:
-tmux capture-pane -t "$(tmux list-windows -F '#{session_name}:#{window_name}' | grep ':claude-notify$')" -p
+tmux capture-pane -t "$(tmux list-windows -F '#{session_name}:#{window_name}' | grep ':cn$')" -p
 
 # To identify which pane the dashboard is showing as selected/active:
 # Parse the captured buffer — the selected entry is prefixed with "> " by the TUI
-tmux capture-pane -t "_shpell-session:claude-notify" -p | grep "^> "
+tmux capture-pane -t "_shpell-session:cn" -p | grep "^> "
 ```
 
 The `> ` prefix identifies the currently highlighted entry. Use this to script "jump to active claude pane" without user interaction.

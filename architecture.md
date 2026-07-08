@@ -32,7 +32,7 @@ TPM load time (tmux startup):
   │   └─ on failure: tmux display-message error, exit 1
   └─ tmux bind-key <@claude-notify-key|C-M-p>
       ├─ if ~/.tmux/plugins/tmux-grimoire/bin/custom_shpell exists:
-      │   └─ run-shell "custom_shpell standard claude-notify 'bin/claude-notify'"
+      │   └─ run-shell "custom_shpell standard cn 'bin/claude-notify'"
       └─ else: popup -E -w 80% -h 80% "bin/claude-notify"
 
 User invokes keybinding (C-M-p by default):
