@@ -145,8 +145,18 @@ func SwitchClientToSessionWindow(session, windowID string) error {
 // outerClientName returns the name of the tmux client that is NOT attached to
 // _shpell-session. Used when running inside the grimoire popup to target the
 // real outer terminal client.
+//
+// #{client_name}/#{client_session} are resolved with an explicit -t <pane>
+// target rather than tmux's implicit current-client lookup, which is
+// ambiguous when invoked from a background process (two clients may be
+// attached at once: the outer terminal and the nested popup client). This
+// mirrors the workaround tmux-grimoire's own shpell.sh applies to itself.
 func outerClientName() string {
-	currentClient, err := run("display-message", "-p", "#{client_name}")
+	paneID := PaneID()
+	if paneID == "" {
+		return ""
+	}
+	currentClient, err := run("display-message", "-p", "-t", paneID, "#{client_name}")
 	if err != nil {
 		return ""
 	}
@@ -167,7 +177,11 @@ func outerClientName() string {
 // in _shpell-session) to the given session and window. No-op when not inside
 // _shpell-session or when no outer client is found.
 func SwitchOuterClientToSessionWindow(session, windowID string) error {
-	currentSession, err := run("display-message", "-p", "#{client_session}")
+	paneID := PaneID()
+	if paneID == "" {
+		return nil
+	}
+	currentSession, err := run("display-message", "-p", "-t", paneID, "#{client_session}")
 	if err != nil || currentSession != "_shpell-session" {
 		return nil
 	}
@@ -190,20 +204,25 @@ func ListLivePanes() ([]string, error) {
 	return strings.Split(out, "\n"), nil
 }
 
-// OuterSession returns the name of the first tmux session that is not _shpell-session.
-// Used to target split-window commands at the user's real session when the dashboard
-// is running inside the grimoire popup.
+// OuterSession returns the session the real outer tmux client (the one not
+// attached to _shpell-session) is actually attached to. Used to target
+// split-window commands at the user's real session when the dashboard is
+// running inside the grimoire popup.
+//
+// This resolves via outerClientName() rather than picking the first entry
+// from `list-sessions`, which picked an arbitrary session whenever more than
+// one non-_shpell-session session was attached (e.g. the popup was opened
+// from "k8s" but list-sessions returned "edit" first).
 func OuterSession() string {
-	out, err := run("list-sessions", "-F", "#{session_name}")
+	client := outerClientName()
+	if client == "" {
+		return ""
+	}
+	session, err := run("display-message", "-p", "-t", client, "#{client_session}")
 	if err != nil {
 		return ""
 	}
-	for _, name := range strings.Split(out, "\n") {
-		if name != "_shpell-session" && name != "" {
-			return name
-		}
-	}
-	return ""
+	return session
 }
 
 // DetachIfShpell calls detach-client when running inside grimoire's _shpell-session,

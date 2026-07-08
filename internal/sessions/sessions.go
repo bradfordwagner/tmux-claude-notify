@@ -182,7 +182,8 @@ func RecoverPath(encodedPath, stored string) string {
 }
 
 // walkRecover attempts to reconstruct a real path by trying each `-`-separated
-// segment as either a directory-name component (literal `-`) or a path separator.
+// segment as either a directory-name component (literal `-` or `.`) or a path
+// separator.
 func walkRecover(base string, segments []string, idx int) string {
 	if idx == len(segments) {
 		if _, err := os.Stat(base); err == nil {
@@ -191,19 +192,50 @@ func walkRecover(base string, segments []string, idx int) string {
 		return ""
 	}
 	// Try combining 1..N remaining segments as the next path component (handles
-	// directory names that contain hyphens, e.g. "tmux-claude-notify").
+	// directory names that contain hyphens or dots, e.g. "tmux-claude-notify"
+	// or "bradfordwagner.src.zmk.config").
 	for n := 1; idx+n <= len(segments); n++ {
-		component := strings.Join(segments[idx:idx+n], "-")
-		candidate := filepath.Join(base, component)
-		info, err := os.Stat(candidate)
-		if err != nil || !info.IsDir() {
-			continue
-		}
-		if result := walkRecover(candidate, segments, idx+n); result != "" {
-			return result
+		for _, component := range joinCandidates(segments[idx : idx+n]) {
+			candidate := filepath.Join(base, component)
+			info, err := os.Stat(candidate)
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			if result := walkRecover(candidate, segments, idx+n); result != "" {
+				return result
+			}
 		}
 	}
 	return ""
+}
+
+// joinCandidates returns every way of joining segments into a single
+// directory-name component, trying each internal boundary as either a
+// literal `-` or a literal `.` — the two characters the Claude Code encoding
+// scheme collapses into `-` alongside `/`. All-hyphen is tried first so
+// directory names that only contain hyphens (the common case, e.g.
+// "tmux-claude-notify") resolve exactly as before.
+func joinCandidates(segments []string) []string {
+	if len(segments) == 1 {
+		return []string{segments[0]}
+	}
+	boundaries := len(segments) - 1
+	total := 1 << boundaries
+	candidates := make([]string, 0, total)
+	for mask := range total {
+		var b strings.Builder
+		b.WriteString(segments[0])
+		for i := range boundaries {
+			if mask&(1<<i) != 0 {
+				b.WriteByte('.')
+			} else {
+				b.WriteByte('-')
+			}
+			b.WriteString(segments[i+1])
+		}
+		candidates = append(candidates, b.String())
+	}
+	return candidates
 }
 
 func readRaw() ([]SessionRecord, error) {
