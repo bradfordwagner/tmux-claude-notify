@@ -559,6 +559,7 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 						if si.record.PaneID != "" {
 							_ = tmuxclient.SelectPane(si.record.PaneID)
 							_ = tmuxclient.SelectWindow(si.record.TmuxSession, si.record.WindowID)
+							_ = tmuxclient.SwitchOuterClientToSessionWindow(si.record.TmuxSession, si.record.WindowID)
 							_ = tmuxclient.DetachIfShpell()
 						} else {
 							return m.doResume(si, "neww")
@@ -629,6 +630,7 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 					}
 					_ = tmuxclient.SelectPane(paneID)
 					_ = tmuxclient.SelectWindow(selected.record.Session, windowID)
+					_ = tmuxclient.SwitchOuterClientToSessionWindow(selected.record.Session, windowID)
 					m.entries = loadEntries()
 					m.clampCursor()
 					_ = tmuxclient.DetachIfShpell()
@@ -649,6 +651,7 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 						if si.record.PaneID != "" {
 							_ = tmuxclient.SelectPane(si.record.PaneID)
 							_ = tmuxclient.SelectWindow(si.record.TmuxSession, si.record.WindowID)
+							_ = tmuxclient.SwitchOuterClientToSessionWindow(si.record.TmuxSession, si.record.WindowID)
 							_ = tmuxclient.DetachIfShpell()
 						} else {
 							return m.doResume(si, "neww")

@@ -207,10 +207,18 @@ At Level-1 (project list), `w` opens `tmux neww -c <path> -n <leaf> -t <outer-se
 ### Requirement: Sessions L2 — `w`/`h`/`v` navigate to or resume selected session
 At Level-2, `w`/`enter` on an active session navigates to its pane. On a closed session (no `pane_id`), `w` resumes via `tmux neww -c <path> -t <outer-session> -- claude --resume <session_id>`. `h`/`v` split horizontally/vertically for closed sessions.
 
-#### Scenario: enter/w on active session navigates to pane
+#### Scenario: enter/w on active session navigates to pane — same session
 - **WHEN** the selected session has a non-empty `pane_id`
 - **AND** the user presses `enter` or `w`
-- **THEN** `SelectPane(paneID)` and `SelectWindow(session, windowID)` are called, then `DetachIfShpell`
+- **AND** the target pane lives in the same outer tmux session
+- **THEN** `SelectPane(paneID)`, `SelectWindow(session, windowID)`, and `SwitchOuterClientToSessionWindow(session, windowID)` are called, then `DetachIfShpell`
+
+#### Scenario: enter/w on active session navigates to pane — different session
+- **WHEN** the selected session has a non-empty `pane_id`
+- **AND** the user presses `enter` or `w`
+- **AND** the target pane lives in a different tmux session than the one the outer client is attached to
+- **THEN** `SwitchOuterClientToSessionWindow` issues `switch-client -c <outer-client> -t <session>:<window>` before the detach
+- **AND** after the popup closes the outer client is in the target session at the correct window
 
 #### Scenario: w on closed session resumes claude in new window
 - **WHEN** the selected session has an empty `pane_id`
@@ -230,8 +238,14 @@ At Level-2, `w`/`enter` on an active session navigates to its pane. On a closed 
 ### Requirement: enter in Notifications view clears notification and navigates
 Pressing `enter` on a Notifications entry SHALL clear the notification (if from notifications.jsonl), navigate to the window via `SelectPane` + `SelectWindow`, and close the popup.
 
-#### Scenario: enter clears and navigates
-- **WHEN** the user presses `enter` on a notifications.jsonl-backed entry
+#### Scenario: enter clears and navigates — same session
+- **WHEN** the user presses `enter` on a notifications.jsonl-backed entry in the same outer session
 - **THEN** `ClearPopStyle`, `UnregisterClearHook`, and `store.ClearPane` are called
-- **AND** `SelectPane(paneID)` + `SelectWindow(session, windowID)` navigate to the pane
+- **AND** `SelectPane(paneID)` + `SelectWindow(session, windowID)` + `SwitchOuterClientToSessionWindow(session, windowID)` navigate to the pane
 - **AND** `DetachIfShpell` closes the popup
+
+#### Scenario: enter clears and navigates — different session
+- **WHEN** the user presses `enter` on a notifications.jsonl-backed entry whose pane lives in a different tmux session
+- **THEN** `ClearPopStyle`, `UnregisterClearHook`, and `store.ClearPane` are called
+- **AND** `SwitchOuterClientToSessionWindow` issues `switch-client -c <outer-client> -t <session>:<window>`
+- **AND** after the popup closes the outer client is in the target session at the correct window

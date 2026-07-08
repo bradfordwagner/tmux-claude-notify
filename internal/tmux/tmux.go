@@ -134,6 +134,51 @@ func SwitchToWindow(windowID string) error {
 	return err
 }
 
+// SwitchClientToSessionWindow switches the current client to the given session
+// and activates the specified window within it. Correct for cross-session jumps;
+// switch-client with a bare window ID does not reliably change the active window.
+func SwitchClientToSessionWindow(session, windowID string) error {
+	_, err := run("switch-client", "-t", session+":"+windowID)
+	return err
+}
+
+// outerClientName returns the name of the tmux client that is NOT attached to
+// _shpell-session. Used when running inside the grimoire popup to target the
+// real outer terminal client.
+func outerClientName() string {
+	currentClient, err := run("display-message", "-p", "#{client_name}")
+	if err != nil {
+		return ""
+	}
+	out, err := run("list-clients", "-F", "#{client_name} #{client_session}")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) == 2 && parts[0] != currentClient && parts[1] != "_shpell-session" {
+			return parts[0]
+		}
+	}
+	return ""
+}
+
+// SwitchOuterClientToSessionWindow switches the outer tmux client (the one not
+// in _shpell-session) to the given session and window. No-op when not inside
+// _shpell-session or when no outer client is found.
+func SwitchOuterClientToSessionWindow(session, windowID string) error {
+	currentSession, err := run("display-message", "-p", "#{client_session}")
+	if err != nil || currentSession != "_shpell-session" {
+		return nil
+	}
+	outerClient := outerClientName()
+	if outerClient == "" {
+		return nil
+	}
+	_, err = run("switch-client", "-c", outerClient, "-t", session+":"+windowID)
+	return err
+}
+
 func ListLivePanes() ([]string, error) {
 	out, err := run("list-panes", "-a", "-F", "#{pane_id}")
 	if err != nil {

@@ -239,7 +239,7 @@ func runJump() error {
 	}
 	_ = tmuxclient.SelectPane(r.Pane)
 	_ = tmuxclient.DetachIfShpell()
-	_ = tmuxclient.SwitchToWindow(r.Window)
+	_ = tmuxclient.SwitchClientToSessionWindow(r.Session, r.Window)
 	if err := runClear(r.Pane); err != nil {
 		return err
 	}
