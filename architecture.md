@@ -30,10 +30,14 @@ TPM load time (tmux startup):
   tmux-claude-notify.tmux
   ├─ go build -o bin/claude-notify ./cmd/claude-notify  (if stale)
   │   └─ on failure: tmux display-message error, exit 1
-  └─ tmux bind-key <@claude-notify-key|C-M-p>
-      ├─ if ~/.tmux/plugins/tmux-grimoire/bin/custom_shpell exists:
-      │   └─ run-shell "custom_shpell standard cn 'bin/claude-notify'"
-      └─ else: popup -E -w 80% -h 80% "bin/claude-notify"
+  ├─ tmux bind-key <@claude-notify-key|C-M-p>
+  │   ├─ if ~/.tmux/plugins/tmux-grimoire/bin/custom_shpell exists:
+  │   │   └─ run-shell "custom_shpell standard cn 'bin/claude-notify'"
+  │   └─ else: popup -E -w 80% -h 80% "bin/claude-notify"
+  ├─ tmux bind-key <@claude-notify-jump-key|C-M-;>
+  │   └─ run-shell "bin/claude-notify jump"   (non-interactive: no dashboard)
+  └─ unless @claude-notify-statusline == "0":
+      └─ set-option -ga status-right " #(bin/claude-notify status)"  (default on)
 
 User invokes keybinding (C-M-p by default):
   bin/claude-notify  (no args → dashboard)
@@ -188,8 +192,9 @@ Pane correlation: given a pane's `pane_current_path`, encode it and look up
 tmux-claude-notify.tmux       TPM entry point (bash, thin)
 bin/claude-notify              compiled binary (gitignored)
 cmd/claude-notify/main.go      binary entry point + subcommand routing
+                               subcommands: notify, clear, status, jump, resurrect, auto-reset
 internal/
-  store/store.go               notifications.jsonl: Append, ReadAll, ClearPane, HasUnclearedPane, UpdateStatus, WindowForPane, UnclearedForWindow
+  store/store.go               notifications.jsonl: Append, ReadAll, ClearPane, HasUnclearedPane, UpdateStatus, WindowForPane, UnclearedForWindow, OldestUncleared
   sessions/sessions.go         sessions.jsonl: SessionRecord, Upsert, ReadAll, SetPinned, Compact, DiscoverAll, RecoverPath
   claude/transcript.go         shared: EncodeProjectPath, LatestTranscriptPath/ID, TranscriptMaxAge (@claude-notify-transcript-age-days, default 14d)
   resurrect/resurrect.go       resurrect.json: Save (snapshot claude panes), Restore (replay --resume into panes)

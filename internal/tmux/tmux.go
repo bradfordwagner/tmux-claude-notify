@@ -42,11 +42,22 @@ func Session(paneID string) (string, error) {
 	return run("display-message", "-t", paneID, "-p", "#{session_name}")
 }
 
+// HighlightColor reads @claude-notify-highlight-color, defaulting to Catppuccin Mocha green.
+func HighlightColor() string {
+	color, _ := run("show-option", "-gqv", "@claude-notify-highlight-color")
+	if color == "" {
+		color = "#a6e3a1"
+	}
+	return color
+}
+
 func SetWindowStyle(windowID string) error {
-	if _, err := run("set-option", "-t", windowID, "window-status-style", "fg=#AD8EE6,bold"); err != nil {
+	color := HighlightColor()
+	style := "fg=" + color + ",bold"
+	if _, err := run("set-option", "-t", windowID, "window-status-style", style); err != nil {
 		return err
 	}
-	_, err := run("set-option", "-t", windowID, "window-status-current-style", "fg=#AD8EE6,bold")
+	_, err := run("set-option", "-t", windowID, "window-status-current-style", style)
 	return err
 }
 

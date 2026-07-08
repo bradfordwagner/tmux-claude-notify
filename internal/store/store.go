@@ -183,6 +183,25 @@ func UnclearedForWindow(windowID string) ([]Record, error) {
 	return result, nil
 }
 
+// OldestUncleared returns the uncleared record with the smallest TS (oldest waiting).
+// Returns nil if no uncleared records exist.
+func OldestUncleared() (*Record, error) {
+	records, err := ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	var oldest *Record
+	for i, r := range records {
+		if r.Cleared {
+			continue
+		}
+		if oldest == nil || r.TS < oldest.TS {
+			oldest = &records[i]
+		}
+	}
+	return oldest, nil
+}
+
 // UpdateStatus updates the status field of the most recent uncleared record for
 // paneID. Atomically rewrites the JSONL file. No-op if no uncleared record exists.
 func UpdateStatus(paneID, status string) error {

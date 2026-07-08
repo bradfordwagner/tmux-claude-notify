@@ -102,11 +102,14 @@ Pinned sessions (`p`) float to the top of the Sessions view and also appear in t
 | Option | Default | Description |
 |---|---|---|
 | `@claude-notify-key` | `C-M-p` | Keybinding to open the dashboard |
+| `@claude-notify-highlight-color` | `#a6e3a1` | Window tab highlight color when waiting (Catppuccin Mocha green) |
 | `@claude-notify-pop-color` | `#1e1e2e` | Pane background color when waiting (falls back to `@tmux-pop-color`, then `#1e1e2e`) |
 | `@claude-notify-stale-minutes` | `5` | Minutes of transcript inactivity before marking a session stale |
 | `@claude-notify-transcript-age-days` | `14` | Maximum age in days of transcript files considered when discovering sessions. Applies to both the dashboard watcher and `resurrect save`. |
 | `@claude-notify-active-reset-seconds` | `15` | Seconds before auto-clearing a notification when the notified pane is already focused. Set to `0` to disable. |
 | `@claude-notify-nav-clear-seconds` | `2` | Seconds before auto-clearing a notification when you navigate to its window via tmux. Set to `0` to disable. |
+| `@claude-notify-statusline` | `1` | Appends a `⚡ N` pending-notification count to `status-right`. Set to `0` to disable. |
+| `@claude-notify-jump-key` | `C-M-\;` | Keybinding to jump directly to the oldest waiting pane and clear it, without opening the dashboard. Semicolons in key names require the `\;` escape in tmux's bind-key syntax. |
 
 ## Resurrect integration
 

@@ -30,3 +30,15 @@ if [[ -x "$GRIMOIRE_SHPELL" ]]; then
 else
   tmux bind-key -n "$key" popup -E -w 80% -h 80% "$BINARY"
 fi
+
+# Quick-jump keybinding: navigates directly to the oldest waiting pane (no dashboard).
+jump_key=$(tmux show-option -gqv "@claude-notify-jump-key")
+jump_key="${jump_key:-C-M-\;}"
+tmux bind-key -n "$jump_key" run-shell "'$BINARY' jump"
+
+# Status-bar segment: appended by default; set @claude-notify-statusline 0 to disable.
+statusline=$(tmux show-option -gqv "@claude-notify-statusline")
+statusline="${statusline:-1}"
+if [[ "$statusline" != "0" ]]; then
+  tmux set-option -ga status-right " #('$BINARY' status)"
+fi

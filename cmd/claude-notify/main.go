@@ -23,6 +23,12 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "status":
+		runStatus()
+	case "jump":
+		if err := runJump(); err != nil {
+			_ = err
+		}
 	case "notify":
 		if err := runNotify(); err != nil {
 			// Exit 0 — hook errors must not surface noisily in tmux
@@ -207,6 +213,33 @@ func clearAfterGracePeriod(paneID string, delaySecs int) {
 			_ = runClear(paneID)
 		}
 	}
+}
+
+func runStatus() {
+	records, err := store.ReadAll()
+	if err != nil {
+		return
+	}
+	count := 0
+	for _, r := range records {
+		if !r.Cleared {
+			count++
+		}
+	}
+	if count > 0 {
+		fmt.Printf("⚡ %d", count)
+	}
+}
+
+func runJump() error {
+	r, err := store.OldestUncleared()
+	if err != nil || r == nil {
+		return err
+	}
+	_ = tmuxclient.SelectPane(r.Pane)
+	_ = tmuxclient.DetachIfShpell()
+	_ = tmuxclient.SwitchToWindow(r.Window)
+	return runClear(r.Pane)
 }
 
 // forkAutoReset spawns a detached background process to run auto-reset.
