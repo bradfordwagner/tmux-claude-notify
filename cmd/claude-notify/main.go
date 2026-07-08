@@ -227,7 +227,8 @@ func runStatus() {
 		}
 	}
 	if count > 0 {
-		fmt.Printf("⚡ %d", count)
+		color := tmuxclient.HighlightColor()
+		fmt.Printf("#[fg=%s,bold]⚡ %d#[default]", color, count)
 	}
 }
 
