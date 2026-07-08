@@ -51,7 +51,7 @@ The JSONL record struct SHALL include a `status` field (string) representing the
 
 #### Scenario: Waiting record sets window highlight
 - **WHEN** a record with `status: waiting` is appended
-- **THEN** `window-status-style` and `window-status-current-style` are set to `fg=#AD8EE6,bold`
+- **THEN** `window-status-style` and `window-status-current-style` are set to `fg=<@claude-notify-highlight-color>,bold` (default `#a6e3a1`)
 
 ### Requirement: Store exposes UpdateStatus for in-place state transitions
 The store SHALL provide `UpdateStatus(paneID string, status string) error` to update the status of the most recent uncleared record for a pane without clearing it.

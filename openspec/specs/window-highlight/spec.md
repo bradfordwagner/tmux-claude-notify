@@ -7,15 +7,23 @@ Visual indicator on the tmux window tab and pane background when claude is waiti
 ## Requirements
 
 ### Requirement: Window tab is highlighted when claude is waiting
-When `claude-notify notify` is invoked, the tmux window containing the notified pane SHALL have both `window-status-style` and `window-status-current-style` set to `fg=#AD8EE6,bold` so the tab is visually distinct whether or not the user is currently on that window.
+When `claude-notify notify` is invoked, the tmux window containing the notified pane SHALL have both `window-status-style` and `window-status-current-style` set to `fg=<color>,bold` where `<color>` is resolved from `@claude-notify-highlight-color` (defaulting to `#a6e3a1`, Catppuccin Mocha green). The tab SHALL be visually distinct whether or not the user is currently on that window.
 
 #### Scenario: Highlight applied on notify subcommand
 - **WHEN** `claude-notify notify` is invoked with a valid `$TMUX_PANE`
-- **THEN** the window has both `window-status-style` and `window-status-current-style` set to `fg=#AD8EE6,bold`
+- **THEN** the window has both `window-status-style` and `window-status-current-style` set to `fg=<highlight-color>,bold`
 
 #### Scenario: Highlight applies to the active (current) window tab
 - **WHEN** the notified window is the currently selected window
-- **THEN** `window-status-current-style fg=#AD8EE6,bold` is set, making the active tab visually distinct
+- **THEN** `window-status-current-style fg=<highlight-color>,bold` is set, making the active tab visually distinct
+
+#### Scenario: Highlight color configurable via @claude-notify-highlight-color
+- **WHEN** `set -g @claude-notify-highlight-color '#ff0000'` is in `tmux.conf`
+- **THEN** the window tab style uses `fg=#ff0000,bold` instead of the default
+
+#### Scenario: Default color is Catppuccin Mocha green
+- **WHEN** `@claude-notify-highlight-color` is not set
+- **THEN** the window tab style uses `fg=#a6e3a1,bold`
 
 The notification SHALL persist until either (a) the user selects the entry from the dashboard, or (b) the auto-reset timer fires for a focused-pane notification. The highlight MUST NOT auto-clear for non-focused panes.
 
