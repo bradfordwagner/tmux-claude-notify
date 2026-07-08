@@ -71,7 +71,7 @@ Press `C-M-p` (default) to open the notification dashboard.
 |---|---|
 | Claude finishes a response | Tab highlights; pane background changes |
 | Press `C-M-p` | Dashboard opens showing all pending notifications |
-| `enter` on an entry | Switches to that window, clears the notification, closes popup |
+| `enter` on an entry | Switches to that window (cross-session), clears the notification, closes popup |
 | `q` / `esc` | Close dashboard without clearing |
 | `/` | Enter search mode — fuzzy-filter the list in real time |
 | `Tab` (in search) | Toggle keyboard focus between the filter input and the table |
@@ -92,7 +92,7 @@ Press `Tab` to switch between the Notifications view and the Sessions view. The 
 | `h` / `v` (L1) | Open a new `claude` session in a horizontal/vertical split |
 | `w` (L2, closed session) | Resume the session with `claude --resume <id>` in a new window |
 | `h` / `v` (L2, closed session) | Resume in a horizontal/vertical split |
-| `w` (L2, active session) | Focus the session's existing pane and close the popup |
+| `w` (L2, active session) | Focus the session's existing pane (cross-session) and close the popup |
 | `/` | Fuzzy-filter the session list |
 
 Pinned sessions (`p`) float to the top of the Sessions view and also appear in the Notifications view even when their pane is not active.
@@ -109,7 +109,7 @@ Pinned sessions (`p`) float to the top of the Sessions view and also appear in t
 | `@claude-notify-active-reset-seconds` | `15` | Seconds before auto-clearing a notification when the notified pane is already focused. Set to `0` to disable. |
 | `@claude-notify-nav-clear-seconds` | `2` | Seconds before auto-clearing a notification when you navigate to its window via tmux. Set to `0` to disable. |
 | `@claude-notify-statusline` | `1` | Appends a `⚡ N` pending-notification count to `status-right`. Set to `0` to disable. |
-| `@claude-notify-jump-key` | `C-M-\;` | Keybinding to jump directly to the oldest waiting pane and clear it, without opening the dashboard. Semicolons in key names require the `\;` escape in tmux's bind-key syntax. |
+| `@claude-notify-jump-key` | `C-M-\;` | Keybinding to jump directly to the oldest waiting pane and clear it, without opening the dashboard. Works from any tmux session. Semicolons in key names require the `\;` escape in tmux's bind-key syntax. |
 
 ## Resurrect integration
 
