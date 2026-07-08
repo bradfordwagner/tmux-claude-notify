@@ -194,7 +194,7 @@ bin/claude-notify              compiled binary (gitignored)
 cmd/claude-notify/main.go      binary entry point + subcommand routing
                                subcommands: notify, clear, status, jump, resurrect, auto-reset
 internal/
-  store/store.go               notifications.jsonl: Append, ReadAll, ClearPane, HasUnclearedPane, UpdateStatus, WindowForPane, UnclearedForWindow, OldestUncleared
+  store/store.go               notifications.jsonl: Append, ReadAll, ClearPane, HasUnclearedPane, UpdateStatus, WindowForPane, UnclearedForWindow, OldestUncleared, ClearOldestUncleared (flock-serialized read-modify-write)
   sessions/sessions.go         sessions.jsonl: SessionRecord, Upsert, ReadAll, SetPinned, Compact, DiscoverAll, RecoverPath
   claude/transcript.go         shared: EncodeProjectPath, LatestTranscriptPath/ID, TranscriptMaxAge (@claude-notify-transcript-age-days, default 14d)
   resurrect/resurrect.go       resurrect.json: Save (snapshot claude panes), Restore (replay --resume into panes)
@@ -282,7 +282,9 @@ DEVELOPMENT.md                 ordered development items
 | Decision | Choice | Reason |
 |---|---|---|
 | Hook path | Go binary only, no bash scripts | single owner for all logic and state |
-| Storage | JSONL append-only | simple bash-writable, Go-readable, no locking |
+| Storage | JSONL append-only | simple bash-writable, Go-readable |
+| Store concurrency | `syscall.Flock` on a sidecar `.lock` file around every read-modify-write (`ClearPane`, `UpdateStatus`, `ClearOldestUncleared`) | Stop hook, auto-reset subprocesses, and `jump` are separate OS processes that can read-modify-write the JSONL concurrently; without a lock, whichever full-file rewrite lands last silently reverts the other's clear, causing `jump` to repeatedly re-select an already-visited pane |
+| Jump atomicity | `ClearOldestUncleared` finds-and-clears the oldest pane in one locked operation, replacing a separate `OldestUncleared` + `ClearPane` pair | closes the gap where a concurrent writer could act between "find oldest" and "clear it" |
 | TUI | bubbletea + lipgloss | no fzf runtime dependency, full color control |
 | Keybinding | TPM option `@claude-notify-key` | user-overridable, standard TPM convention |
 | Hook install | auto-write if missing, read-only check otherwise | friction of manual setup outweighs risk of touching user file |

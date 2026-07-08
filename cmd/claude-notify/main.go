@@ -161,15 +161,20 @@ func runClear(paneID string) error {
 		return err
 	}
 
-	// Window tab highlight is window-scoped — only clear when no sibling panes
-	// in this window still have uncleared notifications.
-	if windowID != "" {
-		remaining, _ := store.UnclearedForWindow(windowID)
-		if len(remaining) == 0 {
-			_ = tmuxclient.ClearWindowStyle(windowID)
-		}
-	}
+	clearWindowIfEmpty(windowID)
 	return nil
+}
+
+// clearWindowIfEmpty tears down window-level tab highlight once no sibling
+// panes in that window still have uncleared notifications.
+func clearWindowIfEmpty(windowID string) {
+	if windowID == "" {
+		return
+	}
+	remaining, _ := store.UnclearedForWindow(windowID)
+	if len(remaining) == 0 {
+		_ = tmuxclient.ClearWindowStyle(windowID)
+	}
 }
 
 // runAutoReset clears the notification once the user's window becomes focused.
@@ -232,19 +237,26 @@ func runStatus() {
 	}
 }
 
+// runJump finds and clears the oldest uncleared notification as one atomic
+// store operation (store.ClearOldestUncleared), so a concurrent writer (the
+// Stop hook, an auto-reset subprocess, or another jump invocation) can never
+// observe or revert the clear between "find oldest" and "mark cleared" — the
+// gap that let jump repeatedly re-select the same pane.
 func runJump() error {
-	r, err := store.OldestUncleared()
-	if err != nil || r == nil {
+	r, err := store.ClearOldestUncleared()
+	if r == nil {
 		return err
 	}
 	_ = tmuxclient.SelectPane(r.Pane)
 	_ = tmuxclient.DetachIfShpell()
 	_ = tmuxclient.SwitchClientToSessionWindow(r.Session, r.Window)
-	if err := runClear(r.Pane); err != nil {
-		return err
-	}
+	_ = tmuxclient.ClearPopStyle(r.Pane)
+	_ = tmuxclient.UnregisterClearHook(r.Pane)
+	clearWindowIfEmpty(r.Window)
+	// Refresh even if the store write above failed — the badge should reflect
+	// whatever the store actually contains, not stale pre-jump state.
 	tmuxclient.RefreshStatusBar()
-	return nil
+	return err
 }
 
 // forkAutoReset spawns a detached background process to run auto-reset.

@@ -1,10 +1,4 @@
-# Spec: quickjump
-
-## Purpose
-
-The `claude-notify jump` subcommand provides a non-interactive path to navigate directly to the oldest waiting pane and clear its notification, without opening the dashboard.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: jump subcommand navigates to oldest waiting pane
 The `claude-notify jump` subcommand SHALL find the uncleared notification with the smallest `ts` (oldest), navigate to that pane, clear the notification, and immediately refresh the tmux status bar via `tmux refresh-client -S`. Navigation SHALL work regardless of which tmux session the user's current client is attached to. If no uncleared notifications exist, it SHALL exit 0 silently. Finding the oldest uncleared notification and clearing it SHALL be a single atomic operation so that a concurrent writer (the Stop hook, an auto-reset subprocess, or another `jump` invocation) cannot cause the same pane to be selected again on a subsequent `jump` after it was already cleared.
