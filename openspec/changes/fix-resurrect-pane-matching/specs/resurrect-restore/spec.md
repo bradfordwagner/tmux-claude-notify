@@ -1,13 +1,7 @@
-# Spec: resurrect-restore
-
-## Purpose
-
-Defines how `claude-notify resurrect restore` replays `claude --resume` commands into the correct panes after a tmux-resurrect cycle, using the window-name key saved by resurrect-save.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Restore replays claude --resume into matching panes
-`claude-notify resurrect restore` SHALL read the resurrect sidecar at `~/.local/share/tmux-claude-notify/resurrect.json` and, for each saved entry, find a live tmux pane matching the same `(tmux_session, window_name, pane_index)`. If a match is found AND the pane is not already running `claude*` AND the pane's `pane_current_path` matches the saved `project_path`, the command `claude --resume <session_id>` SHALL be sent to that pane via `tmux send-keys`. Panes whose path does not match are skipped; no `cd` prefix is used.
+`claude-notify resurrect restore` SHALL read the resurrect sidecar at `~/.local/share/tmux-claude-notify/resurrect.json` and, for each saved entry, find a live tmux pane matching the same `(tmux_session, window_name, pane_index)`. If a match is found AND the pane is not already running `claude*` AND the pane's `pane_current_path` matches the saved `project_path`, the command `claude --resume <session_id>` SHALL be sent to that pane via `tmux send-keys`. Panes whose path does not match SHALL be skipped; no `cd` prefix is used.
 
 #### Scenario: Matching idle pane in correct directory receives resume command
 - **WHEN** a saved entry matches a live pane (by session, window_name, pane_index) that is running a shell (not `claude*`) and whose `pane_current_path` equals `project_path`
@@ -46,3 +40,9 @@ If the sidecar file does not exist or contains an empty panes array, `restore` S
 #### Scenario: Empty panes array
 - **WHEN** the sidecar exists but `panes` is `[]`
 - **THEN** restore exits 0 with no output
+
+## REMOVED Requirements
+
+### Requirement: Restore prepends cd when pane's current path differs
+**Reason**: The `cd` fallback caused wrong-directory panes (including the "cn" grimoire placeholder) to receive `claude --resume` commands. Path mismatch now skips the pane entirely.
+**Migration**: If a pane is not in the correct project directory after restore, manually `cd <project_path>` then run `claude --resume <session_id>`.

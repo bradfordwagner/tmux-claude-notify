@@ -226,6 +226,10 @@ func readSecondsOption(option string, defaultVal int) int {
 	return n
 }
 
+func RefreshStatusBar() {
+	_ = exec.Command("tmux", "refresh-client", "-S").Run()
+}
+
 func NotifySend(windowName string) error {
 	if _, err := exec.LookPath("notify-send"); err != nil {
 		return nil

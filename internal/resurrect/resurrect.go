@@ -11,11 +11,11 @@ import (
 	claudepkg "github.com/bradfordwagner/tmux-claude-notify/internal/claude"
 )
 
-const currentVersion = 1
+const currentVersion = 2
 
 type ResurrectPane struct {
 	TmuxSession string `json:"tmux_session"`
-	WindowIndex int    `json:"window_index"`
+	WindowName  string `json:"window_name"`
 	PaneIndex   int    `json:"pane_index"`
 	PaneID      string `json:"pane_id"`
 	SessionID   string `json:"session_id"`
@@ -68,7 +68,7 @@ func (s ResurrectState) Write() error {
 
 type livePane struct {
 	session     string
-	windowIndex int
+	windowName  string
 	paneIndex   int
 	paneID      string
 	currentCmd  string
@@ -77,7 +77,7 @@ type livePane struct {
 
 func listAllPanes() []livePane {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{pane_current_command}\t#{pane_current_path}").Output()
+		"#{session_name}\t#{window_name}\t#{pane_index}\t#{pane_id}\t#{pane_current_command}\t#{pane_current_path}").Output()
 	if err != nil {
 		return nil
 	}
@@ -90,11 +90,10 @@ func listAllPanes() []livePane {
 		if len(parts) != 6 {
 			continue
 		}
-		wi, _ := strconv.Atoi(parts[1])
 		pi, _ := strconv.Atoi(parts[2])
 		panes = append(panes, livePane{
 			session:     parts[0],
-			windowIndex: wi,
+			windowName:  parts[1],
 			paneIndex:   pi,
 			paneID:      parts[3],
 			currentCmd:  parts[4],
@@ -122,7 +121,7 @@ func Save() error {
 		}
 		state.Panes = append(state.Panes, ResurrectPane{
 			TmuxSession: p.session,
-			WindowIndex: p.windowIndex,
+			WindowName:  p.windowName,
 			PaneIndex:   p.paneIndex,
 			PaneID:      p.paneID,
 			SessionID:   sessionID,
@@ -132,38 +131,44 @@ func Save() error {
 	return state.Write()
 }
 
-type posKey struct {
-	session     string
-	windowIndex int
-	paneIndex   int
+type nameKey struct {
+	session    string
+	windowName string
+	paneIndex  int
 }
 
 // Restore reads the resurrect sidecar and replays "claude --resume <id>" into
-// each matching live pane. Panes already running claude* are skipped.
+// each matching live pane. Matching is by (session, window_name, pane_index) —
+// window names are stable across restarts while window indices are not. Panes
+// already running claude* or whose current path does not match the saved project
+// path are skipped. Sidecars from version < 2 (without window_name) are ignored.
 func Restore() error {
 	state, err := Load()
 	if err != nil || len(state.Panes) == 0 {
 		return err
 	}
+	if state.Version < 2 {
+		return nil
+	}
 
 	panes := listAllPanes()
-	liveByPos := make(map[posKey]livePane, len(panes))
+	liveByName := make(map[nameKey]livePane, len(panes))
 	for _, p := range panes {
-		liveByPos[posKey{p.session, p.windowIndex, p.paneIndex}] = p
+		liveByName[nameKey{p.session, p.windowName, p.paneIndex}] = p
 	}
 
 	for _, saved := range state.Panes {
-		live, ok := liveByPos[posKey{saved.TmuxSession, saved.WindowIndex, saved.PaneIndex}]
+		live, ok := liveByName[nameKey{saved.TmuxSession, saved.WindowName, saved.PaneIndex}]
 		if !ok {
 			continue
 		}
 		if strings.HasPrefix(live.currentCmd, "claude") {
 			continue
 		}
-		cmd := "claude --resume " + saved.SessionID
-		if saved.ProjectPath != "" && live.currentPath != saved.ProjectPath {
-			cmd = "cd " + saved.ProjectPath + " && " + cmd
+		if live.currentPath != saved.ProjectPath {
+			continue
 		}
+		cmd := "claude --resume " + saved.SessionID
 		_ = exec.Command("tmux", "send-keys", "-t", live.paneID, cmd, "Enter").Run()
 	}
 	return nil

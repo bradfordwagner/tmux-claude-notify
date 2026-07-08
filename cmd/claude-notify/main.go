@@ -240,7 +240,11 @@ func runJump() error {
 	_ = tmuxclient.SelectPane(r.Pane)
 	_ = tmuxclient.DetachIfShpell()
 	_ = tmuxclient.SwitchToWindow(r.Window)
-	return runClear(r.Pane)
+	if err := runClear(r.Pane); err != nil {
+		return err
+	}
+	tmuxclient.RefreshStatusBar()
+	return nil
 }
 
 // forkAutoReset spawns a detached background process to run auto-reset.
