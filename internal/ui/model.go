@@ -12,6 +12,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/timer"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/fsnotify/fsnotify"
@@ -31,7 +32,7 @@ var (
 	okColor       = lipgloss.Color("#50FA7B")
 	warnColor     = lipgloss.Color("#FFB86C")
 	unknColor     = lipgloss.Color("#FF5555")
-	selBg         = lipgloss.Color("#313244") // Catppuccin surface0 — row selection background
+	selBg         = lipgloss.Color("#313244")
 	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(accent)
 	selectedStyle = lipgloss.NewStyle().Foreground(accent).Bold(true)
 	normalStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#cdd6f4"))
@@ -74,51 +75,50 @@ type (
 	notificationsChangedMsg struct{}
 )
 
-// entry is a row in the Notifications view.
 type entry struct {
 	record         store.Record
 	Path           string
-	pinned         bool   // true if backed by a pinned sessions record
-	sessionID      string // set when backed by sessions.jsonl (enables pin toggle)
-	isSessionEntry bool   // true = came from sessions.jsonl, not notifications.jsonl
-	popped         bool   // true when the pane currently has background pop active
+	pinned         bool
+	sessionID      string
+	isSessionEntry bool
+	popped         bool
 }
 
-// sessionEntry is a row in the Sessions view.
 type sessionEntry struct {
 	record   sessions.SessionRecord
-	projPath string // trimmed display path
+	projPath string
 }
 
-// projRow is a Level-1 row in the Sessions table (one per project).
 type projRow struct {
-	key          string // "📌 Pinned" or trimmed projPath
+	key          string
 	count        int
 	lastActivity int64
 	bestStatus   string
 }
 
 type model struct {
-	entries      []entry
-	cursor       int
-	setupResult  setup.Result
-	setupMessage string
-	toast        string
-	toastIsError bool
-	toastTimer   timer.Model
-	watcher      *fsnotify.Watcher
+	entries           []entry
+	cursor            int
+	setupResult       setup.Result
+	setupMessage      string
+	toast             string
+	toastIsError      bool
+	toastTimer        timer.Model
+	watcher           *fsnotify.Watcher
 	transcriptWatcher *watcher.Watcher
-	quitting     bool
-	width        int
+	quitting          bool
+	width             int
+	height            int
+	vp                viewport.Model
 
 	activeView   viewMode
 	sessionItems []sessionEntry
-	drillProject string // "" = projects table (Level 1); non-empty = sessions for this project (Level 2)
+	drillProject string
 	sortBy       sortField
 	filterActive bool
 
 	searchMode  bool
-	searchFocus bool // true = textinput has keyboard; false = table has keyboard
+	searchFocus bool
 	searchQuery string
 	searchInput textinput.Model
 }
@@ -128,6 +128,132 @@ func (m model) termWidth() int {
 		return m.width
 	}
 	return 120
+}
+
+func (m model) termHeight() int {
+	if m.height > 0 {
+		return m.height
+	}
+	return 24
+}
+
+// countLines returns the number of rendered lines in s, or 0 for empty strings.
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(strings.TrimRight(s, "\n"), "\n") + 1
+}
+
+// fixedRowCount returns the number of terminal lines consumed by elements
+// outside the scrollable viewport (header area + footer).
+// This must stay in sync with View() — add here whenever a new fixed element is added.
+func (m model) fixedRowCount() int {
+	n := 1 // tab header
+	if m.searchMode {
+		n++
+	}
+	if m.activeView == viewNotifications {
+		n += countLines(m.renderSetupStatus())
+	}
+	if m.toast != "" {
+		n++
+	}
+	n += 2 // blank separator + footer hint
+	return n
+}
+
+// recalcViewport resizes the viewport to fill available height/width and
+// refreshes its content. Call whenever terminal size or fixed-element
+// visibility changes, or when data reloads.
+func (m *model) recalcViewport() {
+	m.vp.Width = m.termWidth()
+	m.vp.Height = max(1, m.termHeight()-m.fixedRowCount())
+	m.vp.SetContent(m.renderListContent())
+}
+
+// contentHeaderLines returns the number of non-data lines rendered before
+// the first selectable row in the current view's content string. Used by
+// ensureCursorVisible to map cursor index → content line number.
+func (m model) contentHeaderLines() int {
+	switch m.activeView {
+	case viewNotifications:
+		if len(m.filteredEntries()) > 0 {
+			return 2 // column header + separator
+		}
+		return 0
+	case viewSessions:
+		if m.drillProject != "" {
+			if len(m.sessionsForDrill()) > 0 {
+				return 4 // title + sep + column header + sep
+			}
+			return 2 // title + sep before "No sessions" message
+		}
+		if len(buildProjRows(m.filteredSessions())) > 0 {
+			return 2 // column header + separator
+		}
+		return 0
+	}
+	return 0
+}
+
+// ensureCursorVisible adjusts the viewport's Y offset so the selected row
+// is always within the visible window (minimum-scroll invariant).
+func (m *model) ensureCursorVisible() {
+	line := m.cursor + m.contentHeaderLines()
+	if line < m.vp.YOffset {
+		m.vp.SetYOffset(line)
+	} else if line >= m.vp.YOffset+m.vp.Height {
+		m.vp.SetYOffset(line - m.vp.Height + 1)
+	}
+}
+
+// renderListContent returns the full scrollable content string for the
+// current view and drill level. This is passed to viewport.SetContent.
+func (m model) renderListContent() string {
+	switch m.activeView {
+	case viewNotifications:
+		return m.renderNotificationsContent()
+	case viewSessions:
+		if m.drillProject != "" {
+			return m.renderSessionsL2Content()
+		}
+		return m.renderSessionsL1Content()
+	}
+	return ""
+}
+
+// footerHint returns the total selectable item count and the hint text for
+// the current view. Used by renderFooter to compute scroll indicator placement.
+func (m model) footerHint() (total int, hint string) {
+	switch m.activeView {
+	case viewNotifications:
+		return len(m.filteredEntries()), "↑/↓ j/k  •  enter: focus  •  p: pin  •  tab: Sessions  •  q: quit"
+	case viewSessions:
+		if m.drillProject != "" {
+			return len(m.filteredDrill()), "↑/↓ j/k  •  enter/w: new win  h: split-h  v: split-v  •  p: pin  •  esc: back  •  tab: Notifications  •  q: quit"
+		}
+		return len(buildProjRows(m.filteredSessions())), "↑/↓ j/k  •  enter: sessions  •  w: new win  h: split-h  v: split-v  •  s: sort  •  f: filter  •  tab: Notifications  •  q: quit"
+	}
+	return 0, ""
+}
+
+// renderFooter renders the footer hint line. When the list overflows the
+// viewport, a right-aligned position indicator "cursor+1/total" is appended.
+func (m model) renderFooter() string {
+	total, hint := m.footerHint()
+	hintStr := dimStyle.Render(hint)
+	if total <= m.vp.Height {
+		return hintStr
+	}
+	indicator := fmt.Sprintf("%d/%d", m.cursor+1, total)
+	hintW := runewidth.StringWidth(hint)
+	indicW := runewidth.StringWidth(indicator)
+	gap := m.termWidth() - hintW - indicW - 2
+	if gap < 1 {
+		gap = 1
+	}
+	return hintStr + strings.Repeat(" ", gap) + dimStyle.Render(indicator)
 }
 
 func newModel() (model, error) {
@@ -169,6 +295,10 @@ func newModel() (model, error) {
 	}
 	m.entries = loadEntries()
 
+	// Initialize viewport with safe defaults; resized on first WindowSizeMsg.
+	m.vp = viewport.New(m.termWidth(), max(1, m.termHeight()-m.fixedRowCount()))
+	m.vp.SetContent(m.renderListContent())
+
 	tw.Start()
 	return m, nil
 }
@@ -197,8 +327,10 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 			m.toast = m.setupMessage
 			m.toastIsError = false
 			m.toastTimer = timer.NewWithInterval(10*time.Second, time.Second)
+			m.recalcViewport()
 			return m, tea.Batch(watchCmd(m.watcher), m.toastTimer.Init())
 		}
+		m.recalcViewport()
 		return m, watchCmd(m.watcher)
 
 	case timer.TickMsg:
@@ -209,10 +341,14 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 	case timer.TimeoutMsg:
 		m.toastTimer, _ = m.toastTimer.Update(msg)
 		m.toast = ""
+		m.recalcViewport()
 		return m, nil
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.height = msg.Height
+		m.recalcViewport()
+		m.ensureCursorVisible()
 		return m, nil
 
 	case notificationsChangedMsg:
@@ -221,6 +357,8 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 			m.sessionItems = loadSessionEntries(m.sortBy, m.filterActive)
 		}
 		m.clampCursor()
+		m.recalcViewport()
+		m.ensureCursorVisible()
 		return m, watchCmd(m.watcher)
 
 	case watcher.StateChange:
@@ -233,11 +371,12 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 			}
 		}
 		m.clampCursor()
+		m.recalcViewport()
+		m.ensureCursorVisible()
 		return m, watcherCmd(m.transcriptWatcher)
 
 	case tea.KeyMsg:
 		// Input-focused search mode: alphanumeric keys go to the textinput.
-		// Tab drops focus to the table; esc exits search entirely.
 		if m.searchMode && m.searchFocus {
 			switch msg.String() {
 			case "ctrl+c":
@@ -248,29 +387,28 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 
 			case "esc":
 				m.clearSearch()
+				m.recalcViewport()
 				return m, nil
 
 			case "tab":
-				// Hand focus to the table; filter stays active.
 				m.searchFocus = false
 				m.searchInput.Blur()
 				return m, nil
 
 			case "enter", " ":
-				// Fall through to the normal enter handler below.
+				// Fall through to normal enter handler below.
 
 			default:
 				var tiCmd tea.Cmd
 				m.searchInput, tiCmd = m.searchInput.Update(msg)
 				m.searchQuery = m.searchInput.Value()
 				m.clampCursorToFiltered()
+				m.recalcViewport()
+				m.ensureCursorVisible()
 				return m, tiCmd
 			}
 		}
 
-		// Normal key handling — active both when search is off and when search is
-		// on but the table has focus. Filtered helpers are used throughout so the
-		// correct (possibly narrowed) list is always targeted.
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.watcher.Close()
@@ -283,14 +421,17 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 				m.searchMode = true
 				m.searchFocus = true
 				m.searchInput.Focus()
+				m.recalcViewport()
 			}
 
 		case "esc":
 			if m.searchMode {
 				m.clearSearch()
+				m.recalcViewport()
 			} else if m.activeView == viewSessions && m.drillProject != "" {
 				m.drillProject = ""
 				m.cursor = 0
+				m.recalcViewport()
 			} else {
 				m.watcher.Close()
 				m.transcriptWatcher.Close()
@@ -300,11 +441,9 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 
 		case "tab":
 			if m.searchMode {
-				// Tab returns focus to the input within the same view.
 				m.searchFocus = true
 				m.searchInput.Focus()
 			} else {
-				// Tab switches views when not searching.
 				if m.activeView == viewNotifications {
 					m.activeView = viewSessions
 					m.cursor = 0
@@ -315,24 +454,55 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 					m.cursor = 0
 					m.drillProject = ""
 				}
+				m.recalcViewport()
 			}
 
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
 			}
+			m.vp.SetContent(m.renderListContent())
+			m.ensureCursorVisible()
 
 		case "down", "j":
 			maxIdx := m.filteredListLen() - 1
 			if m.cursor < maxIdx {
 				m.cursor++
 			}
+			m.vp.SetContent(m.renderListContent())
+			m.ensureCursorVisible()
+
+		case "ctrl+d":
+			half := max(1, m.vp.Height/2)
+			total := m.filteredListLen()
+			m.cursor = min(m.cursor+half, max(0, total-1))
+			m.vp.SetContent(m.renderListContent())
+			m.ensureCursorVisible()
+
+		case "ctrl+u":
+			half := max(1, m.vp.Height/2)
+			m.cursor = max(0, m.cursor-half)
+			m.vp.SetContent(m.renderListContent())
+			m.ensureCursorVisible()
+
+		case "pgdown":
+			total := m.filteredListLen()
+			m.cursor = min(m.cursor+m.vp.Height, max(0, total-1))
+			m.vp.SetContent(m.renderListContent())
+			m.ensureCursorVisible()
+
+		case "pgup":
+			m.cursor = max(0, m.cursor-m.vp.Height)
+			m.vp.SetContent(m.renderListContent())
+			m.ensureCursorVisible()
 
 		case "s":
 			if m.activeView == viewSessions {
 				m.sortBy = (m.sortBy + 1) % 2
 				m.sessionItems = loadSessionEntries(m.sortBy, m.filterActive)
 				m.clampCursor()
+				m.recalcViewport()
+				m.ensureCursorVisible()
 			}
 
 		case "f":
@@ -340,6 +510,7 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 				m.filterActive = !m.filterActive
 				m.sessionItems = loadSessionEntries(m.sortBy, m.filterActive)
 				m.cursor = 0
+				m.recalcViewport()
 			}
 
 		case "p":
@@ -353,6 +524,8 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 							m.sessionItems = loadSessionEntries(m.sortBy, m.filterActive)
 							m.entries = loadEntries()
 							m.clampCursor()
+							m.recalcViewport()
+							m.ensureCursorVisible()
 						}
 					}
 				}
@@ -365,6 +538,8 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 							m.entries = loadEntries()
 							m.sessionItems = loadSessionEntries(m.sortBy, m.filterActive)
 							m.clampCursor()
+							m.recalcViewport()
+							m.ensureCursorVisible()
 						}
 					}
 				}
@@ -438,6 +613,7 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 						m.toast = "No active pane — switch to Sessions tab to resume"
 						m.toastIsError = false
 						m.toastTimer = timer.NewWithInterval(5*time.Second, time.Second)
+						m.recalcViewport()
 						return m, m.toastTimer.Init()
 					}
 					paneID := selected.record.Pane
@@ -464,6 +640,7 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 						m.drillProject = rows[m.cursor].key
 						m.clearSearch()
 						m.cursor = 0
+						m.recalcViewport()
 					}
 				} else {
 					drilled := m.filteredDrill()
@@ -492,12 +669,12 @@ func (m *model) clearSearch() {
 	m.searchInput.Blur()
 }
 
-// doResume opens a closed session. mode is one of "neww", "split-h", "split-v".
 func (m model) doResume(si sessionEntry, mode string) (tea.Model, tea.Cmd) {
 	if !tmuxclient.InTmux() {
 		m.toast = "Cannot resume: not in tmux"
 		m.toastIsError = true
 		m.toastTimer = timer.NewWithInterval(5*time.Second, time.Second)
+		m.recalcViewport()
 		return m, m.toastTimer.Init()
 	}
 	projPath := sessions.RecoverPath(si.record.EncodedPath, si.record.ProjectPath)
@@ -505,6 +682,7 @@ func (m model) doResume(si sessionEntry, mode string) (tea.Model, tea.Cmd) {
 		m.toast = "Cannot resume: project path unknown"
 		m.toastIsError = true
 		m.toastTimer = timer.NewWithInterval(5*time.Second, time.Second)
+		m.recalcViewport()
 		return m, m.toastTimer.Init()
 	}
 	outer := tmuxclient.OuterSession()
@@ -520,7 +698,7 @@ func (m model) doResume(si sessionEntry, mode string) (tea.Model, tea.Cmd) {
 			args = append(args, "-t", outer)
 		}
 		args = append(args, "--", "claude", "--resume", si.record.SessionID)
-	default: // "neww"
+	default:
 		args = []string{"neww", "-c", projPath}
 		if outer != "" {
 			args = append(args, "-t", outer)
@@ -532,19 +710,19 @@ func (m model) doResume(si sessionEntry, mode string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// doNewSession opens a fresh claude session (no --resume) in projPath.
-// mode is "neww", "split-h", or "split-v". neww names the window after the leaf dir.
 func (m model) doNewSession(projPath, mode string) (tea.Model, tea.Cmd) {
 	if !tmuxclient.InTmux() {
 		m.toast = "Cannot open: not in tmux"
 		m.toastIsError = true
 		m.toastTimer = timer.NewWithInterval(5*time.Second, time.Second)
+		m.recalcViewport()
 		return m, m.toastTimer.Init()
 	}
 	if projPath == "" {
 		m.toast = "Cannot open: project path unknown"
 		m.toastIsError = true
 		m.toastTimer = timer.NewWithInterval(5*time.Second, time.Second)
+		m.recalcViewport()
 		return m, m.toastTimer.Init()
 	}
 	outer := tmuxclient.OuterSession()
@@ -560,7 +738,7 @@ func (m model) doNewSession(projPath, mode string) (tea.Model, tea.Cmd) {
 			args = append(args, "-t", outer)
 		}
 		args = append(args, "--", "claude")
-	default: // "neww"
+	default:
 		leafName := filepath.Base(projPath)
 		args = []string{"neww", "-c", projPath, "-n", leafName}
 		if outer != "" {
@@ -568,15 +746,11 @@ func (m model) doNewSession(projPath, mode string) (tea.Model, tea.Cmd) {
 		}
 		args = append(args, "--", "claude")
 	}
-	// Run synchronously — tmux neww/split-window returns as soon as the window
-	// is created; DetachIfShpell must fire after, not before.
 	_ = exec.Command("tmux", args...).Run()
 	_ = tmuxclient.DetachIfShpell()
 	return m, nil
 }
 
-// projPathForRow finds the real filesystem path for a Level-1 project row by
-// recovering the path from any session in that group.
 func (m model) projPathForRow(row projRow) string {
 	for _, e := range m.sessionItems {
 		if groupKeyFor(e) == row.key {
@@ -630,8 +804,6 @@ func (m model) sessionsForDrill() []sessionEntry {
 	return result
 }
 
-// filteredEntries returns m.entries filtered by searchQuery using fuzzy matching.
-// Match target per row: window name + " " + path + " " + session.
 func (m model) filteredEntries() []entry {
 	if m.searchQuery == "" {
 		return m.entries
@@ -648,8 +820,6 @@ func (m model) filteredEntries() []entry {
 	return result
 }
 
-// filteredSessions returns m.sessionItems filtered by searchQuery.
-// Match target per row: project path (key).
 func (m model) filteredSessions() []sessionEntry {
 	if m.searchQuery == "" {
 		return m.sessionItems
@@ -666,8 +836,6 @@ func (m model) filteredSessions() []sessionEntry {
 	return result
 }
 
-// filteredDrill returns sessions for the current drill project, filtered by searchQuery.
-// Match target per row: session ID + " " + window name.
 func (m model) filteredDrill() []sessionEntry {
 	drilled := m.sessionsForDrill()
 	if m.searchQuery == "" {
@@ -695,7 +863,6 @@ func groupKeyFor(e sessionEntry) string {
 	return "(unknown)"
 }
 
-// buildProjRows computes Level-1 project rows from the flat session list.
 func buildProjRows(items []sessionEntry) []projRow {
 	var order []string
 	type acc struct {
@@ -752,12 +919,8 @@ func (m model) View() string {
 		b.WriteString(style.Render(prefix+m.toast) + "\n")
 	}
 	b.WriteString("\n")
-	switch m.activeView {
-	case viewNotifications:
-		b.WriteString(m.renderNotificationsView())
-	case viewSessions:
-		b.WriteString(m.renderSessionsView())
-	}
+	b.WriteString(m.vp.View() + "\n")
+	b.WriteString(m.renderFooter())
 	return b.String()
 }
 
@@ -769,7 +932,7 @@ func (m model) renderTabHeader() string {
 		active := titleStyle.Render("[" + notifLabel + "]")
 		inactive := dimStyle.Render("  " + strings.TrimSpace(sessLabel) + "  ")
 		return active + inactive
-	default: // viewSessions
+	default:
 		inactive := dimStyle.Render("  " + strings.TrimSpace(notifLabel) + "  ")
 		active := titleStyle.Render("[" + sessLabel + "]")
 		sortNames := []string{"age", "status"}
@@ -784,7 +947,9 @@ func (m model) renderTabHeader() string {
 	}
 }
 
-func (m model) renderNotificationsView() string {
+// renderNotificationsContent returns the scrollable content for the
+// Notifications view (column header + separator + all data rows).
+func (m model) renderNotificationsContent() string {
 	var b strings.Builder
 	filtered := m.filteredEntries()
 	if len(m.entries) == 0 {
@@ -792,7 +957,6 @@ func (m model) renderNotificationsView() string {
 	} else if len(filtered) == 0 {
 		b.WriteString(dimStyle.Render(fmt.Sprintf("No results for %q", m.searchQuery)) + "\n")
 	} else {
-		// Fixed overhead: 2 prefix + 12 status + 2 + 3 pin + 2 + 1 pop + 2 + 20 window + 2 + pathWidth + 2 + 14 session + 2 + 10 age = 74
 		pathWidth := max(10, m.termWidth()-74)
 		header := fmt.Sprintf("  %-12s  %-3s  %s  %-20s  %-*s  %-14s  %s",
 			"STATUS", "PIN", "P", "WINDOW", pathWidth, "PATH", "SESSION", "AGE")
@@ -822,7 +986,7 @@ func (m model) renderNotificationsView() string {
 				ind := selectedStyle.Background(selBg).Render("> ")
 				innerW := 2 + 12 + 2 + runewidth.StringWidth(pinCol) + 2 + 1 + 2 + 20 + 2 + pathWidth + 2 + 14 + 2 + runewidth.StringWidth(formatAge(r.TS))
 				pad := bgs.Render(strings.Repeat(" ", max(0, m.termWidth()-innerW)))
-				b.WriteString(ind+badge+sep+pin+sep+pop+sep+win+sep+ps+sep+sess+sep+age+pad+"\n")
+				b.WriteString(ind + badge + sep + pin + sep + pop + sep + win + sep + ps + sep + sess + sep + age + pad + "\n")
 			} else {
 				popDisp := " "
 				if e.popped {
@@ -833,63 +997,62 @@ func (m model) renderNotificationsView() string {
 				b.WriteString("  " + normalStyle.Render(line) + "\n")
 			}
 		}
-		b.WriteString("\n" + dimStyle.Render("↑/↓ j/k  •  enter: focus  •  p: pin  •  tab: Sessions  •  q: quit") + "\n")
 	}
 	return b.String()
 }
 
-func (m model) renderSessionsView() string {
+// renderSessionsL1Content returns the scrollable content for the Sessions
+// view at Level-1 (projects table).
+func (m model) renderSessionsL1Content() string {
 	var b strings.Builder
-
-	if m.drillProject == "" {
-		// ── Level 1: projects table ──────────────────────────────────────────
-		rows := buildProjRows(m.filteredSessions())
-		if len(m.sessionItems) == 0 {
-			msg := "No sessions discovered."
-			if m.filterActive {
-				msg = "No active sessions."
-			}
-			b.WriteString(dimStyle.Render(msg) + "\n")
-			return b.String()
+	rows := buildProjRows(m.filteredSessions())
+	if len(m.sessionItems) == 0 {
+		msg := "No sessions discovered."
+		if m.filterActive {
+			msg = "No active sessions."
 		}
-		if len(rows) == 0 {
-			b.WriteString(dimStyle.Render(fmt.Sprintf("No results for %q", m.searchQuery)) + "\n")
-			return b.String()
-		}
-		// Fixed overhead: 2 prefix + 12 status + 2 + 2 + 5 count + 2 + 10 age = 35
-		projWidth := max(15, m.termWidth()-35)
-		header := fmt.Sprintf("  %-12s  %-*s  %5s  %s", "STATUS", projWidth, "PROJECT", "COUNT", "LAST USED")
-		b.WriteString(dimStyle.Render(header) + "\n")
-		b.WriteString(dimStyle.Render("  "+strings.Repeat("─", m.termWidth()-2)) + "\n")
-		for i, row := range rows {
-			status := row.bestStatus
-			if status == "" {
-				status = "idle"
-			}
-			proj := runewidth.Truncate(row.key, projWidth, "…")
-			proj = runewidth.FillRight(proj, projWidth)
-			if i == m.cursor {
-				bgs := lipgloss.NewStyle().Background(selBg)
-				sep := bgs.Render("  ")
-				badge := renderStatusBadge(status, selBg)
-				prj := bgs.Render(proj)
-				cnt := bgs.Render(fmt.Sprintf("%5d", row.count))
-				age := bgs.Render(formatAge(row.lastActivity))
-				ind := selectedStyle.Background(selBg).Render("> ")
-				innerW := 2 + 12 + 2 + projWidth + 2 + 5 + 2 + runewidth.StringWidth(formatAge(row.lastActivity))
-				pad := bgs.Render(strings.Repeat(" ", max(0, m.termWidth()-innerW)))
-				b.WriteString(ind+badge+sep+prj+sep+cnt+sep+age+pad+"\n")
-			} else {
-				badge := renderStatusBadge(status)
-				line := fmt.Sprintf("%s  %s  %5d  %s", badge, proj, row.count, formatAge(row.lastActivity))
-				b.WriteString("  " + normalStyle.Render(line) + "\n")
-			}
-		}
-		b.WriteString("\n" + dimStyle.Render("↑/↓ j/k  •  enter: sessions  •  w: new win  h: split-h  v: split-v  •  s: sort  •  f: filter  •  tab: Notifications  •  q: quit") + "\n")
+		b.WriteString(dimStyle.Render(msg) + "\n")
 		return b.String()
 	}
+	if len(rows) == 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("No results for %q", m.searchQuery)) + "\n")
+		return b.String()
+	}
+	projWidth := max(15, m.termWidth()-35)
+	header := fmt.Sprintf("  %-12s  %-*s  %5s  %s", "STATUS", projWidth, "PROJECT", "COUNT", "LAST USED")
+	b.WriteString(dimStyle.Render(header) + "\n")
+	b.WriteString(dimStyle.Render("  "+strings.Repeat("─", m.termWidth()-2)) + "\n")
+	for i, row := range rows {
+		status := row.bestStatus
+		if status == "" {
+			status = "idle"
+		}
+		proj := runewidth.Truncate(row.key, projWidth, "…")
+		proj = runewidth.FillRight(proj, projWidth)
+		if i == m.cursor {
+			bgs := lipgloss.NewStyle().Background(selBg)
+			sep := bgs.Render("  ")
+			badge := renderStatusBadge(status, selBg)
+			prj := bgs.Render(proj)
+			cnt := bgs.Render(fmt.Sprintf("%5d", row.count))
+			age := bgs.Render(formatAge(row.lastActivity))
+			ind := selectedStyle.Background(selBg).Render("> ")
+			innerW := 2 + 12 + 2 + projWidth + 2 + 5 + 2 + runewidth.StringWidth(formatAge(row.lastActivity))
+			pad := bgs.Render(strings.Repeat(" ", max(0, m.termWidth()-innerW)))
+			b.WriteString(ind + badge + sep + prj + sep + cnt + sep + age + pad + "\n")
+		} else {
+			badge := renderStatusBadge(status)
+			line := fmt.Sprintf("%s  %s  %5d  %s", badge, proj, row.count, formatAge(row.lastActivity))
+			b.WriteString("  " + normalStyle.Render(line) + "\n")
+		}
+	}
+	return b.String()
+}
 
-	// ── Level 2: sessions for drillProject ───────────────────────────────────
+// renderSessionsL2Content returns the scrollable content for the Sessions
+// view at Level-2 (session rows for the drilled project).
+func (m model) renderSessionsL2Content() string {
+	var b strings.Builder
 	b.WriteString(titleStyle.Render("  ← "+m.drillProject) + "\n")
 	b.WriteString(dimStyle.Render("  "+strings.Repeat("─", min(runewidth.StringWidth(m.drillProject)+4, 50))) + "\n")
 
@@ -926,7 +1089,7 @@ func (m model) renderSessionsView() string {
 				ind := selectedStyle.Background(selBg).Render("> ")
 				innerW := 2 + 12 + 2 + runewidth.StringWidth(pinCol) + 2 + 10 + 2 + runewidth.StringWidth(formatAge(r.LastActivity))
 				pad := bgs.Render(strings.Repeat(" ", max(0, m.termWidth()-innerW)))
-				b.WriteString(ind+badge+sep+pin+sep+sidStr+sep+age+pad+"\n")
+				b.WriteString(ind + badge + sep + pin + sep + sidStr + sep + age + pad + "\n")
 			} else {
 				badge := renderStatusBadge(status)
 				line := fmt.Sprintf("%s  %s  %-10s  %s", badge, pinCol, sid, formatAge(r.LastActivity))
@@ -934,13 +1097,9 @@ func (m model) renderSessionsView() string {
 			}
 		}
 	}
-	b.WriteString("\n" + dimStyle.Render("↑/↓ j/k  •  enter/w: new win  h: split-h  v: split-v  •  p: pin  •  esc: back  •  tab: Notifications  •  q: quit") + "\n")
 	return b.String()
 }
 
-// renderStatusBadge renders a status string with its icon, padded to a fixed
-// visual width using runewidth so emoji-width differences don't misalign columns.
-// Pass an optional background color to bake it into the badge (needed for full-width row highlights).
 func renderStatusBadge(status string, bg ...lipgloss.Color) string {
 	if status == "" {
 		status = "waiting"
@@ -1166,7 +1325,6 @@ func loadEntries() []entry {
 	result = append(result, notifNormal...)
 	result = append(result, sessActiveNormal...)
 
-	// Sort: pinned first, then popped (active background highlight) first, then most recent.
 	sort.SliceStable(result, func(i, j int) bool {
 		a, b := result[i], result[j]
 		if a.pinned != b.pinned {

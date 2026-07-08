@@ -89,7 +89,7 @@ When `searchMode` is `true` and `searchFocus` is `true`, any key not otherwise i
 - **THEN** the action fires normally on the filtered list
 
 ### Requirement: Dashboard renders agent status per entry in Notifications view
-Each Notifications view entry SHALL display STATUS (icon + text), PIN (📌 or blank), POP indicator (● or blank), WINDOW name, PATH (last two components, `~`-abbreviated, dynamic width), SESSION name, and AGE. The raw pane ID SHALL NOT appear. A header row and separator SHALL appear above the entry list when entries are present.
+Each Notifications view entry SHALL display STATUS (icon + text), PIN (📌 or blank), POP indicator (● or blank), WINDOW name, PATH (last two components, `~`-abbreviated, dynamic width), SESSION name, and AGE. The raw pane ID SHALL NOT appear. A header row and separator SHALL appear above the entry list when entries are present. Only the entries within the current scroll window (as defined by the tui-viewport capability) SHALL be rendered.
 
 #### Scenario: Waiting entry styled with accent color
 - **WHEN** an entry has `status: waiting`
@@ -122,6 +122,11 @@ Each Notifications view entry SHALL display STATUS (icon + text), PIN (📌 or b
 - **THEN** `IsPanePopped(paneID)` is called for each notification-backed entry to set the pop flag
 - **AND** the flag is used for display only (not persisted)
 
+#### Scenario: Entries below viewport height are not rendered
+- **WHEN** the number of entries exceeds the available viewport height
+- **THEN** only the entries within `[scrollOffset, scrollOffset + viewportHeight)` are rendered
+- **AND** the user can reach off-screen entries by moving the cursor past the visible boundary
+
 ### Requirement: Dashboard auto-refreshes on transcript state change
 When the transcript watcher detects a state change while the dashboard is open, the dashboard SHALL re-render within one bubbletea event loop tick without user interaction.
 
@@ -134,7 +139,7 @@ When the transcript watcher detects a state change while the dashboard is open, 
 - **THEN** `store.ClearPane` is called and the entry is removed from the dashboard
 
 ### Requirement: Sessions view is a two-level drill-in table
-The Sessions view SHALL display a Level-1 projects table (one row per project, plus "📌 Pinned" group). `enter` on a project row drills into Level-2 (session rows for that project). Navigation back and quit behavior is governed by the `esc key closes the dashboard or navigates back` requirement.
+The Sessions view SHALL display a Level-1 projects table (one row per project, plus "📌 Pinned" group). `enter` on a project row drills into Level-2 (session rows for that project). Navigation back and quit behavior is governed by the `esc key closes the dashboard or navigates back` requirement. Only the rows within the current scroll window (as defined by the tui-viewport capability) SHALL be rendered at each level.
 
 #### Scenario: Level-1 shows one row per project
 - **WHEN** the Sessions view is activated
@@ -143,6 +148,14 @@ The Sessions view SHALL display a Level-1 projects table (one row per project, p
 #### Scenario: enter on Level-1 row drills in
 - **WHEN** the user presses `enter` on a project row
 - **THEN** Level-2 shows session rows for that project
+
+#### Scenario: Level-1 rows beyond viewport height are not rendered
+- **WHEN** the number of project rows exceeds `viewportHeight`
+- **THEN** only rows within the scroll window are rendered and the cursor can scroll to reveal the rest
+
+#### Scenario: Level-2 rows beyond viewport height are not rendered
+- **WHEN** the number of session rows for a project exceeds `viewportHeight`
+- **THEN** only rows within the scroll window are rendered and the cursor can scroll to reveal the rest
 
 ### Requirement: `s` key cycles sort in Sessions view
 Pressing `s` in the Sessions view SHALL cycle the sort field between `age` (default, most recently active first) and `status` (most urgent first). The active sort field is shown in the tab header. Pinned sessions always float above unpinned within any sort order.
