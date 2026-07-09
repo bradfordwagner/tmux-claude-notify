@@ -26,7 +26,10 @@ key="${key:-C-M-p}"
 # Fall back to tmux popup if grimoire is not present.
 GRIMOIRE_SHPELL="${HOME}/.tmux/plugins/tmux-grimoire/bin/custom_shpell"
 if [[ -x "$GRIMOIRE_SHPELL" ]]; then
-  tmux bind-key -n "$key" run-shell "$GRIMOIRE_SHPELL standard cn '$BINARY' --replay"
+  # cd into the plugin dir first so a manual restart from the pane (after the
+  # dashboard exits) is just `bin/claude-notify` instead of the full path.
+  CMD="cd $PLUGIN_DIR && bin/claude-notify"
+  tmux bind-key -n "$key" run-shell "$GRIMOIRE_SHPELL standard cn '$CMD'"
 else
   tmux bind-key -n "$key" popup -E -w 80% -h 80% "$BINARY"
 fi
