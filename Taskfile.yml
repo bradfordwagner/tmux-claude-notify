@@ -43,15 +43,11 @@ tasks:
     cmds:
       - mkdir -p "{{.HOME}}/.tmux/plugins"
       - |
-        if [ -L "{{.PLUGIN_DIR}}" ]; then
-          echo "already linked: {{.PLUGIN_DIR}} -> $(readlink {{.PLUGIN_DIR}})"
-        elif [ -e "{{.PLUGIN_DIR}}" ]; then
-          echo "error: {{.PLUGIN_DIR}} exists and is not a symlink — remove it manually"
-          exit 1
-        else
-          ln -s "$(pwd)" "{{.PLUGIN_DIR}}"
-          echo "linked: {{.PLUGIN_DIR}} -> $(pwd)"
+        if [ -e "{{.PLUGIN_DIR}}" ]; then
+          rm -rf "{{.PLUGIN_DIR}}"
         fi
+        ln -s "$(pwd)" "{{.PLUGIN_DIR}}"
+        echo "linked: {{.PLUGIN_DIR}} -> $(pwd)"
 
   setup:
     desc: Verify development dependencies and link plugin directory
