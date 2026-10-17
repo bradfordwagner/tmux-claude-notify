@@ -43,6 +43,10 @@ When `claude` finishes a response and returns to the prompt, the Claude Code `St
 5. Sets `window-active-style bg=<color>` (pane background pop)
 6. Spawns a detached `claude-notify desktop notify` child (10s timeout) for the desktop notification: Windows toast under WSL, `notify-send` elsewhere (`@claude-notify-desktop`). Never block the hook on this — `notify-send` hangs ~66s on WSL2 D-Bus activation
 
+### Clear paths while the dashboard is closed
+
+The `UserPromptSubmit` hook runs `claude-notify clear` (pane from `$TMUX_PANE`) the moment the user answers. As a backstop, `status` and `jump` call `reconcileAnswered`, which uses `watcher.Snapshot` to clear uncleared live-pane entries whose transcript shows a user message or running agent (15s grace after the notification).
+
 ### Transcript watcher (while dashboard is open)
 
 When the dashboard TUI starts, it launches a transcript watcher that reads Claude Code's own JSONL session files at `~/.claude/projects/<encoded-path>/<session-id>.jsonl`. The watcher:
@@ -71,7 +75,8 @@ The binary auto-configures this on first run, but the correct schema is:
 ```json
 {
   "hooks": {
-    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "/path/to/bin/claude-notify notify"}]}]
+    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "/path/to/bin/claude-notify notify"}]}],
+    "UserPromptSubmit": [{"matcher": "", "hooks": [{"type": "command", "command": "/path/to/bin/claude-notify clear"}]}]
   }
 }
 ```

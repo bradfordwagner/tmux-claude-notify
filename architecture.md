@@ -176,7 +176,14 @@ One hook in `~/.claude/settings.json` calls `claude-notify notify`:
 
 | Hook | When it fires |
 |---|---|
-| `Stop` | Claude finishes its response turn and returns to the user prompt |
+| `Stop` | Claude finishes its response turn and returns to the user prompt → `claude-notify notify` |
+| `UserPromptSubmit` | User submits a prompt → `claude-notify clear` (clears this pane via `$TMUX_PANE`) |
+
+The `status` and `jump` subcommands also self-heal while the dashboard is closed:
+`reconcileAnswered` calls `watcher.Snapshot` (one-shot transcript read, no fsnotify)
+for uncleared live panes older than 15s and clears any whose transcript shows a user
+message or running agent. The 15s grace avoids clearing a fresh notification when the
+Stop hook fires before Claude Code flushes the final assistant event.
 
 The Stop hook is a fallback: it writes to JSONL when the dashboard is closed. While
 the dashboard is open, the transcript watcher provides richer real-time state.

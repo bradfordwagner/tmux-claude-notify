@@ -47,14 +47,15 @@ git clone https://github.com/bradfordwagner/tmux-claude-notify \
 
 ## Hook setup
 
-No manual action required. On first dashboard open, `claude-notify` automatically adds the `Stop` hook to `~/.claude/settings.json` and shows a brief toast confirmation.
+No manual action required. On first dashboard open, `claude-notify` automatically adds the `Stop` and `UserPromptSubmit` hooks to `~/.claude/settings.json` and shows a brief toast confirmation.
 
 For dotfile-managed setups (Ansible, chezmoi, etc.), the hook entry looks like:
 
 ```json
 {
   "hooks": {
-    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "/path/to/bin/claude-notify notify"}]}]
+    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "/path/to/bin/claude-notify notify"}]}],
+    "UserPromptSubmit": [{"matcher": "", "hooks": [{"type": "command", "command": "/path/to/bin/claude-notify clear"}]}]
   }
 }
 ```

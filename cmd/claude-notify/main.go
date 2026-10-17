@@ -12,6 +12,7 @@ import (
 	"github.com/bradfordwagner/tmux-claude-notify/internal/store"
 	tmuxclient "github.com/bradfordwagner/tmux-claude-notify/internal/tmux"
 	"github.com/bradfordwagner/tmux-claude-notify/internal/ui"
+	"github.com/bradfordwagner/tmux-claude-notify/internal/watcher"
 )
 
 func main() {
@@ -41,6 +42,10 @@ func main() {
 			if arg == "--pane" && i+1 < len(os.Args[2:]) {
 				paneID = os.Args[i+3]
 			}
+		}
+		if paneID == "" {
+			// UserPromptSubmit hook: the pane is the one that launched claude.
+			paneID = tmuxclient.PaneID()
 		}
 		if paneID == "" {
 			os.Exit(0)
@@ -257,12 +262,50 @@ func livePaneSet() map[string]bool {
 	return set
 }
 
+// answeredGrace is how long a fresh notification is exempt from transcript
+// reconciliation: the Stop hook can fire before Claude Code flushes the final
+// assistant event, which would make a legitimate "waiting" look answered.
+const answeredGrace = 15 * time.Second
+
+// reconcileAnswered clears uncleared notifications whose transcript shows the
+// user already responded (a user message) or the agent working again. It covers
+// the window where the dashboard watcher is not running. Cleared records are
+// marked in place so the caller's count reflects them.
+func reconcileAnswered(records []store.Record, live map[string]bool) {
+	want := map[string]bool{}
+	now := time.Now().UnixNano()
+	for _, r := range records {
+		if r.Cleared || (live != nil && !live[r.Pane]) || now-r.TS < int64(answeredGrace) {
+			continue
+		}
+		want[r.Pane] = true
+	}
+	if len(want) == 0 {
+		return
+	}
+	answered := map[string]bool{}
+	for _, sc := range watcher.Snapshot(want) {
+		if sc.Clear || sc.Status == watcher.StatusRunning {
+			answered[sc.PaneID] = true
+		}
+	}
+	for pane := range answered {
+		_ = runClear(pane)
+	}
+	for i := range records {
+		if answered[records[i].Pane] {
+			records[i].Cleared = true
+		}
+	}
+}
+
 func runStatus() {
 	records, err := store.ReadAll()
 	if err != nil {
 		return
 	}
 	live := livePaneSet()
+	reconcileAnswered(records, live)
 	seen := make(map[string]bool)
 	count := 0
 	for _, r := range records {
@@ -284,7 +327,11 @@ func runStatus() {
 // observe or revert the clear between "find oldest" and "mark cleared" — the
 // gap that let jump repeatedly re-select the same pane.
 func runJump() error {
-	r, err := store.ClearOldestLive(livePaneSet())
+	live := livePaneSet()
+	if recs, rerr := store.ReadAll(); rerr == nil {
+		reconcileAnswered(recs, live)
+	}
+	r, err := store.ClearOldestLive(live)
 	if r == nil {
 		return err
 	}

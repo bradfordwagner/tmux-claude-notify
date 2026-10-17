@@ -36,6 +36,9 @@ type hookMatcher struct {
 // rawSettings preserves unknown keys when round-tripping the JSON file.
 type rawSettings map[string]json.RawMessage
 
+// executable is a var so tests can supply a binary path named claude-notify.
+var executable = os.Executable
+
 func SettingsPath() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".claude", "settings.json")
@@ -61,13 +64,20 @@ func Check() Result {
 	return Result{Status: StatusNotConfigured}
 }
 
-// hookEvents lists all event types this plugin registers.
-var hookEvents = []string{"Stop"}
+// hookEvents lists all event types this plugin registers, with the binary
+// subcommand each one runs: Stop raises the notification, UserPromptSubmit
+// clears it as soon as the user answers.
+var hookEvents = []string{"Stop", "UserPromptSubmit"}
 
-// Configure adds Stop and PreToolUse hooks to settings.json if missing,
+var hookSubcommand = map[string]string{
+	"Stop":             "notify",
+	"UserPromptSubmit": "clear",
+}
+
+// Configure adds the Stop and UserPromptSubmit hooks to settings.json if missing,
 // creating the file if it does not exist. Returns a message describing what happened.
 func Configure() (string, error) {
-	binary, _ := os.Executable()
+	binary, _ := executable()
 	path := SettingsPath()
 
 	data, err := os.ReadFile(path)
@@ -85,11 +95,6 @@ func Configure() (string, error) {
 		if ok, _ := isConfigured(data); ok {
 			return "hooks already configured", nil
 		}
-	}
-
-	newMatcher := hookMatcher{
-		Matcher: "",
-		Hooks:   []hookCommand{{Type: "command", Command: binary + " notify"}},
 	}
 
 	// Merge with any other hook event types already present.
@@ -112,8 +117,12 @@ func Configure() (string, error) {
 		hooksMap = make(map[string][]hookMatcher)
 	}
 	for _, event := range hookEvents {
-		if !hasNotifyHook(hooksMap[event]) {
-			hooksMap[event] = append(hooksMap[event], newMatcher)
+		sub := hookSubcommand[event]
+		if !hasHook(hooksMap[event], sub) {
+			hooksMap[event] = append(hooksMap[event], hookMatcher{
+				Matcher: "",
+				Hooks:   []hookCommand{{Type: "command", Command: binary + " " + sub}},
+			})
 		}
 	}
 
@@ -158,17 +167,17 @@ func isConfigured(data []byte) (bool, error) {
 		return false, err
 	}
 	for _, event := range hookEvents {
-		if !hasNotifyHook(s.Hooks[event]) {
+		if !hasHook(s.Hooks[event], hookSubcommand[event]) {
 			return false, nil
 		}
 	}
 	return true, nil
 }
 
-func hasNotifyHook(matchers []hookMatcher) bool {
+func hasHook(matchers []hookMatcher, sub string) bool {
 	for _, m := range matchers {
 		for _, cmd := range m.Hooks {
-			if strings.Contains(cmd.Command, "claude-notify notify") {
+			if strings.HasSuffix(strings.TrimSpace(cmd.Command), "claude-notify "+sub) {
 				return true
 			}
 		}
