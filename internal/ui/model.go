@@ -19,6 +19,7 @@ import (
 	"github.com/mattn/go-runewidth"
 	"github.com/sahilm/fuzzy"
 
+	"github.com/bradfordwagner/tmux-claude-notify/internal/desktop"
 	"github.com/bradfordwagner/tmux-claude-notify/internal/sessions"
 	"github.com/bradfordwagner/tmux-claude-notify/internal/setup"
 	"github.com/bradfordwagner/tmux-claude-notify/internal/store"
@@ -622,6 +623,7 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 					if !selected.isSessionEntry {
 						_ = tmuxclient.ClearPopStyle(paneID)
 						_ = tmuxclient.UnregisterClearHook(paneID)
+						_ = desktop.ClearAsync(paneID)
 						_ = store.ClearPane(paneID)
 						remaining, _ := store.UnclearedForWindow(windowID)
 						if len(remaining) == 0 {
@@ -1176,6 +1178,11 @@ func watcherCmd(tw *watcher.Watcher) tea.Cmd {
 func applyStateChange(sc watcher.StateChange) {
 	if sc.Clear {
 		_ = tmuxclient.ClearPopStyle(sc.PaneID)
+		// Guarded: the watcher emits Clear on every user message, and each
+		// toast retraction spawns powershell.exe.
+		if has, _ := store.HasUnclearedPane(sc.PaneID); has {
+			_ = desktop.ClearAsync(sc.PaneID)
+		}
 		_ = store.ClearPane(sc.PaneID)
 		remaining, _ := store.UnclearedForWindow(sc.WindowID)
 		if len(remaining) == 0 {

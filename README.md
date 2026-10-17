@@ -11,7 +11,7 @@ The indicator stays until you acknowledge it — no timeout, no auto-dismiss.
 - **Dashboard** — a bubbletea TUI with two views: a Notifications view (pending notifications) and a Sessions view (all discovered Claude sessions, browseable and resumable)
 - **Fuzzy search** — press `/` in the dashboard to filter any view in real time
 - **Session browser** — two-level drill-in (projects → sessions) with pin, filter, and open/resume via `w`/`h`/`v`
-- **Desktop notification** — fires `notify-send` if available (Linux/WSL)
+- **Desktop notification** — Windows toast under WSL, `notify-send` on Linux; sent in the background so the Stop hook never blocks, and the toast is retracted when the notification clears
 - **Transcript watcher** — reads Claude Code's own JSONL session files to derive richer state (`running`, `waiting`, `stale`) in near-realtime while the dashboard is open
 - **Auto-clear on navigation** — navigating to a popped pane clears it automatically after `@claude-notify-nav-clear-seconds` (default 2s); no dashboard interaction needed
 - **Reconciliation** — on dashboard open, corrects any stale notifications from while the dashboard was closed
@@ -109,6 +109,7 @@ Pinned sessions (`p`) float to the top of the Sessions view and also appear in t
 | `@claude-notify-active-reset-seconds` | `15` | Seconds before auto-clearing a notification when the notified pane is already focused. Set to `0` to disable. |
 | `@claude-notify-nav-clear-seconds` | `2` | Seconds before auto-clearing a notification when you navigate to its window via tmux. Set to `0` to disable. |
 | `@claude-notify-statusline` | `1` | Appends a `⚡ N` pending-notification count to `status-right`. Set to `0` to disable. |
+| `@claude-notify-desktop` | `auto` | Desktop notification backend: `auto` (Windows toast when `powershell.exe` is on PATH, else `notify-send` if installed, else none), `toast`, `notify-send`, or `off`. Always sent from a detached background process with a 10s timeout. Only toasts are retracted on clear. |
 | `@claude-notify-jump-key` | `C-M-\;` | Keybinding to jump directly to the oldest waiting pane and clear it, without opening the dashboard. Works from any tmux session. Semicolons in key names require the `\;` escape in tmux's bind-key syntax. |
 
 ## Resurrect integration

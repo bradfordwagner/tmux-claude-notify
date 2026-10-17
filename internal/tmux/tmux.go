@@ -294,9 +294,8 @@ func RefreshStatusBar() {
 	_ = exec.Command("tmux", "refresh-client", "-S").Run()
 }
 
-func NotifySend(windowName string) error {
-	if _, err := exec.LookPath("notify-send"); err != nil {
-		return nil
-	}
-	return exec.Command("notify-send", "claude is waiting", "Window: "+windowName).Run()
+// GlobalOption returns the value of a global tmux option, or "" when unset.
+func GlobalOption(name string) string {
+	val, _ := run("show-option", "-gqv", name)
+	return val
 }

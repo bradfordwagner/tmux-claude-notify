@@ -23,7 +23,8 @@
 │                   (idempotent return)      notifications.jsonl       │
 │                                           + SetWindowStyle           │
 │                                           + SetPopStyle(paneID)      │
-│                                           + notify-send (optional)   │
+│                                           + desktop.NotifyAsync      │
+│                                             (detached child, 10s cap)│
 └─────────────────────────────────────────────────────────────────────┘
 
 TPM load time (tmux startup):
@@ -37,7 +38,9 @@ TPM load time (tmux startup):
   ├─ tmux bind-key <@claude-notify-jump-key|C-M-;>
   │   └─ run-shell "bin/claude-notify jump"   (non-interactive: no dashboard)
   └─ unless @claude-notify-statusline == "0":
-      └─ set-option -ga status-right " #(bin/claude-notify status)"  (default on)
+      └─ status-right: strip every existing " #(bin/claude-notify status)" copy,
+         then append exactly one (default on; @claude-notify-statusline 0 strips only)
+         → re-sourcing tmux.conf never stacks duplicate ⚡ N segments
 
 User invokes keybinding (C-M-p by default):
   bin/claude-notify  (no args → dashboard)
@@ -67,6 +70,7 @@ User invokes keybinding (C-M-p by default):
       ├─ transcript watcher: watches ~/.claude/projects/**/*.jsonl via fsnotify
       │   ├─ state change → running/waiting/stale → UpdateStatus or Append
       │   └─ user message  → ClearPane + ClearWindowStyle (user responded)
+      │                        + desktop.ClearAsync only if pane had an uncleared entry
       └─ q/esc → close transcript watcher + DetachIfShpell → tea.Quit
 ```
 
@@ -84,13 +88,20 @@ User invokes keybinding (C-M-p by default):
       │
       └─── no ──► first notification for this pane
                   │
-                  ├──► store.Append               notifications.jsonl
+                  ├──► store.Append               notifications.jsonl   (first: rest is best-effort)
                   │    {ts, pane, window, window_name, session, status:"waiting"}
                   │
                   ├──► tmux window-status-style        (tab: #AD8EE6,bold)
                   ├──► tmux window-status-current-style (active tab: same)
                   ├──► set-option -p window-style bg=<color>  (pane pop bg, pane-scoped)
-                  ├──► notify-send                      (desktop toast, optional)
+                  ├──► desktop.NotifyAsync → proc.SpawnSelf (Setsid, closed stdio; hook returns ~50ms)
+                  │       └─ child: claude-notify desktop notify --backend <b> --pane <id> --window <name>
+                  │            backend = @claude-notify-desktop (auto|toast|notify-send|off)
+                  │              auto: powershell.exe on PATH → toast; else notify-send; else off
+                  │            toast:       powershell.exe -EncodedCommand → ToastNotifier.Show
+                  │                         (Tag "pane-<N>", Group "claude-notify", PowerShell AppID)
+                  │            notify-send: notify-send "claude is waiting" "Window: <name>"
+                  │            every child bounded by 10s context timeout
                   │
                   └──► auto-reset subprocess (when delaySecs > 0 OR navDelaySecs > 0)
                        │  reads @claude-notify-active-reset-seconds (default 15; 0=off)
@@ -141,6 +152,8 @@ User invokes keybinding (C-M-p by default):
       ▼
  UI enter handler → runClear(paneID)
       ├──► store.WindowForPane        (window ID from JSONL; works even when pane is gone)
+      ├──► desktop.ClearAsync         (toast backend only: detached child →
+      │                                 ToastNotificationManager.History.Remove(tag, group, appId))
       ├──► store.ClearPane            (marked cleared:true in JSONL)
       ├──► store.UnclearedForWindow   (check remaining notifications for this window)
       │       └─ if none remain ──► tmux window-status-style unset
@@ -192,12 +205,14 @@ Pane correlation: given a pane's `pane_current_path`, encode it and look up
 tmux-claude-notify.tmux       TPM entry point (bash, thin)
 bin/claude-notify              compiled binary (gitignored)
 cmd/claude-notify/main.go      binary entry point + subcommand routing
-                               subcommands: notify, clear, status, jump, resurrect, auto-reset
+                               subcommands: notify, clear, status, jump, resurrect, auto-reset, desktop (notify|clear; internal)
 internal/
   store/store.go               notifications.jsonl: Append, ReadAll, ClearPane, HasUnclearedPane, UpdateStatus, WindowForPane, UnclearedForWindow, OldestUncleared, ClearOldestUncleared (flock-serialized read-modify-write)
   sessions/sessions.go         sessions.jsonl: SessionRecord, Upsert, ReadAll, SetPinned, Compact, DiscoverAll, RecoverPath
   claude/transcript.go         shared: EncodeProjectPath, LatestTranscriptPath/ID, TranscriptMaxAge (@claude-notify-transcript-age-days, default 14d)
   resurrect/resurrect.go       resurrect.json: Save (snapshot claude panes), Restore (replay --resume into panes)
+  desktop/desktop.go           desktop notifications: backend resolve, NotifyAsync/ClearAsync (detached), Windows toast via powershell.exe, notify-send
+  proc/proc.go                 SpawnSelf: detached (Setsid) re-exec of the binary; used by auto-reset + desktop
   tmux/tmux.go                 tmux command helpers (IsPanePopped: show-options -p window-style → pop indicator)
   setup/setup.go               ~/.claude/settings.json hook check + auto-configure
   watcher/watcher.go           transcript file watcher: state derivation, pane correlation, sessions.Upsert on discovery
@@ -299,6 +314,9 @@ DEVELOPMENT.md                 ordered development items
 | Idempotent notify | `HasUnclearedPane` before Append | Stop fires multiple times per skill invocation; only first call creates JSONL entry |
 | Multi-pane window clearing | `UnclearedForWindow` after `ClearPane` gates style teardown | clearing one pane must not remove the window highlight while sibling panes still have uncleared notifications |
 | Gone-pane visibility | show all uncleared entries; `(gone)` in PATH when pane missing | live-pane filter silently hides valid notifications (e.g. ~/dotfiles session after pane restart) |
+| Desktop notification | detached child with 10s timeout; Append runs before it | `notify-send` blocked the Stop hook ~66s under WSL2 (D-Bus waits to activate xfce4-notifyd, which cannot start headless); Claude Code waits on Stop hooks, so every turn stalled |
+| WSL desktop backend | Windows toast via `powershell.exe -EncodedCommand`, tagged per pane | native Windows notification; base64 UTF-16LE avoids quoting bugs from window names; tag/group lets clear/jump/dashboard retract the toast when the tmux notification clears |
+| Status-right segment | strip-then-append in the TPM script | `set -ga` on every tmux.conf re-source stacked duplicate `⚡ N` segments |
 | Hook registered | Stop only | fallback for when dashboard is closed; transcript watcher is primary when open |
 | Transcript watcher | embedded in dashboard TUI, not daemon | no IPC complexity, lifecycle tied to TUI, TPM entry point unchanged |
 | Pane correlation | forward encode `pane_current_path` → lookup project dir | unambiguous; naive decode fails for paths with hyphens/dots |

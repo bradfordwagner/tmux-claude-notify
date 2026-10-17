@@ -14,6 +14,8 @@ bin/claude-notify              # compiled Go binary (gitignored)
 cmd/claude-notify/main.go      # binary entry point + subcommand routing
 internal/
   store/store.go               # JSONL notification log (Append, ReadAll, ClearPane, HasUnclearedPane, UpdateStatus)
+  desktop/desktop.go           # desktop notifications (toast / notify-send), detached + 10s timeout
+  proc/proc.go                 # SpawnSelf: detached re-exec of the binary
   tmux/tmux.go                 # tmux command helpers
   setup/setup.go               # ~/.claude/settings.json hook check + auto-configure
   watcher/watcher.go           # transcript file watcher: state derivation, pane correlation
@@ -36,10 +38,10 @@ When `claude` finishes a response and returns to the prompt, the Claude Code `St
 `bin/claude-notify notify` (invoked by the Stop hook):
 1. Reads `$TMUX_PANE` (inherited env from the shell that launched `claude`) to identify the window
 2. Checks `~/.local/share/tmux-claude-notify/notifications.jsonl` for an existing uncleared entry for this pane — if one exists, re-applies styles and returns (idempotent; prevents duplicate entries from rapid hook firings)
-3. Sets `window-status-style` and `window-status-current-style` to `fg=#AD8EE6,bold` on the window
-4. Sets `window-active-style bg=<color>` (pane background pop)
-5. Fires `notify-send` for a desktop notification (if available)
-6. Appends a record to `~/.local/share/tmux-claude-notify/notifications.jsonl` with `status:"waiting"`
+3. Appends a record to `~/.local/share/tmux-claude-notify/notifications.jsonl` with `status:"waiting"`
+4. Sets `window-status-style` and `window-status-current-style` to `fg=#AD8EE6,bold` on the window
+5. Sets `window-active-style bg=<color>` (pane background pop)
+6. Spawns a detached `claude-notify desktop notify` child (10s timeout) for the desktop notification: Windows toast under WSL, `notify-send` elsewhere (`@claude-notify-desktop`). Never block the hook on this — `notify-send` hangs ~66s on WSL2 D-Bus activation
 
 ### Transcript watcher (while dashboard is open)
 
@@ -139,7 +141,7 @@ Used in bradfordwagner's devtainer dotfiles:
 ## Conventions
 
 - Shell scripts: `#!/usr/bin/env bash`; hook scripts must not exit non-zero noisily (tmux logs errors)
-- `notify-send` for Linux/WSL; guard with `command -v notify-send` for portability
+- Desktop notifications go through `internal/desktop` only (detached + timeout); never call `notify-send`/`powershell.exe` synchronously from the hook path
 - TPM plugin entry point stays thin — all logic lives in the Go binary
 - No timeouts on the visual indicator; persists until user acknowledges
 - **All changes must update architecture diagrams** — any modification to data flow, component boundaries, or hook wiring must be reflected in the relevant diagram(s) before the change is considered complete

@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"syscall"
 	"time"
 
+	"github.com/bradfordwagner/tmux-claude-notify/internal/desktop"
+	"github.com/bradfordwagner/tmux-claude-notify/internal/proc"
 	"github.com/bradfordwagner/tmux-claude-notify/internal/resurrect"
 	"github.com/bradfordwagner/tmux-claude-notify/internal/store"
 	tmuxclient "github.com/bradfordwagner/tmux-claude-notify/internal/tmux"
@@ -46,6 +47,22 @@ func main() {
 		}
 		if err := runClear(paneID); err != nil {
 			_ = err
+		}
+	case "desktop":
+		// Detached child spawned by desktop.NotifyAsync / ClearAsync.
+		if len(os.Args) < 3 {
+			os.Exit(0)
+		}
+		flags := map[string]string{}
+		args := os.Args[3:]
+		for i := 0; i+1 < len(args); i += 2 {
+			flags[args[i]] = args[i+1]
+		}
+		switch os.Args[2] {
+		case "notify":
+			_ = desktop.Notify(flags["--backend"], flags["--pane"], flags["--window"])
+		case "clear":
+			_ = desktop.Clear(flags["--backend"], flags["--pane"])
 		}
 	case "resurrect":
 		if len(os.Args) >= 3 {
@@ -114,15 +131,8 @@ func runNotify() error {
 	windowName, _ := tmuxclient.WindowName(paneID)
 	session, _ := tmuxclient.Session(paneID)
 
-	if err := tmuxclient.SetWindowStyle(windowID); err != nil {
-		return err
-	}
-	_ = tmuxclient.SetPopStyle(paneID)
-
-	if err := tmuxclient.NotifySend(windowName); err != nil {
-		_ = err
-	}
-
+	// Record first: everything after this is best-effort, and the hook can be
+	// killed by Claude Code's hook timeout.
 	if err := store.Append(store.Record{
 		TS:         store.NowNano(),
 		Pane:       paneID,
@@ -133,6 +143,14 @@ func runNotify() error {
 	}); err != nil {
 		return err
 	}
+
+	if err := tmuxclient.SetWindowStyle(windowID); err != nil {
+		return err
+	}
+	_ = tmuxclient.SetPopStyle(paneID)
+
+	// Detached + bounded: notify-send can hang 60s+ on D-Bus activation.
+	_ = desktop.NotifyAsync(paneID, windowName)
 
 	// Fork a detached subprocess to auto-clear the notification.
 	// If the pane is already focused, it clears after delaySecs (active-reset grace period).
@@ -157,6 +175,7 @@ func runClear(paneID string) error {
 	// Pane pop is per-pane — always clear it for this specific pane.
 	_ = tmuxclient.ClearPopStyle(paneID)
 	_ = tmuxclient.UnregisterClearHook(paneID)
+	_ = desktop.ClearAsync(paneID)
 	if err := store.ClearPane(paneID); err != nil {
 		return err
 	}
@@ -252,6 +271,7 @@ func runJump() error {
 	_ = tmuxclient.SwitchClientToSessionWindow(r.Session, r.Window)
 	_ = tmuxclient.ClearPopStyle(r.Pane)
 	_ = tmuxclient.UnregisterClearHook(r.Pane)
+	_ = desktop.ClearAsync(r.Pane)
 	clearWindowIfEmpty(r.Window)
 	// Refresh even if the store write above failed — the badge should reflect
 	// whatever the store actually contains, not stale pre-jump state.
@@ -262,23 +282,9 @@ func runJump() error {
 // forkAutoReset spawns a detached background process to run auto-reset.
 // The parent returns immediately; the child sleeps and clears.
 func forkAutoReset(paneID string, delaySecs, navDelaySecs int) error {
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	args := []string{
-		exe, "auto-reset",
+	return proc.SpawnSelf("auto-reset",
 		"--pane", paneID,
 		"--delay", strconv.Itoa(delaySecs),
 		"--nav-delay", strconv.Itoa(navDelaySecs),
-	}
-	proc, err := os.StartProcess(exe, args, &os.ProcAttr{
-		Files: []*os.File{nil, nil, nil},
-		Sys:   &syscall.SysProcAttr{Setsid: true},
-	})
-	if err != nil {
-		return err
-	}
-	// Release so the parent doesn't accumulate a zombie entry.
-	return proc.Release()
+	)
 }
