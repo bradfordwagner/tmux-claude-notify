@@ -21,17 +21,22 @@ fi
 key=$(tmux show-option -gqv "@claude-notify-key")
 key="${key:-C-M-p}"
 
-# Use grimoire's custom_shpell if installed (check by path to avoid TPM load-order issues).
-# Grimoire handles toggle by detecting _shpell-session and calling detach-client.
-# Fall back to tmux popup if grimoire is not present.
+# Dashboard launcher. Default is a plain display-popup: the binary runs directly
+# in the popup and CN_CLIENT (the invoking client) lets it switch the right
+# terminal. Set @claude-notify-popup-mode to "shpell" to use grimoire's
+# custom_shpell instead (needs tmux-grimoire; checked by path to avoid TPM load order).
+mode=$(tmux show-option -gqv "@claude-notify-popup-mode")
 GRIMOIRE_SHPELL="${HOME}/.tmux/plugins/tmux-grimoire/bin/custom_shpell"
-if [[ -x "$GRIMOIRE_SHPELL" ]]; then
+if [[ "$mode" == "shpell" && -x "$GRIMOIRE_SHPELL" ]]; then
   # cd into the plugin dir first so a manual restart from the pane (after the
   # dashboard exits) is just `bin/claude-notify` instead of the full path.
   CMD="cd $PLUGIN_DIR && bin/claude-notify"
   tmux bind-key -n "$key" run-shell "$GRIMOIRE_SHPELL standard cn '$CMD'"
 else
-  tmux bind-key -n "$key" popup -E -w 80% -h 80% "$BINARY"
+  # display-popup does not expand formats in its command, run-shell does: it
+  # bakes the client name into the popup command line.
+  tmux bind-key -n "$key" run-shell \
+    "tmux display-popup -c '#{client_name}' -E -w 80% -h 80% -b rounded -T ' claude-notify ' \"CN_CLIENT='#{client_name}' '$BINARY'\""
 fi
 
 # Quick-jump keybinding: navigates directly to the oldest waiting pane (no dashboard).

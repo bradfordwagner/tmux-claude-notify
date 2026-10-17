@@ -142,6 +142,18 @@ func SwitchClientToSessionWindow(session, windowID string) error {
 	return err
 }
 
+// popupClient returns the client that opened the dashboard popup, passed by the
+// key binding as CN_CLIENT=#{client_name}. Empty outside a plain popup.
+func popupClient() string {
+	return os.Getenv("CN_CLIENT")
+}
+
+// InPopup reports whether the dashboard runs in a plain display-popup (as
+// opposed to a grimoire shpell), where exiting the process closes it.
+func InPopup() bool {
+	return popupClient() != ""
+}
+
 // outerClientName returns the name of the tmux client that is NOT attached to
 // _shpell-session. Used when running inside the grimoire popup to target the
 // real outer terminal client.
@@ -152,6 +164,9 @@ func SwitchClientToSessionWindow(session, windowID string) error {
 // attached at once: the outer terminal and the nested popup client). This
 // mirrors the workaround tmux-grimoire's own shpell.sh applies to itself.
 func outerClientName() string {
+	if c := popupClient(); c != "" {
+		return c
+	}
 	paneID := PaneID()
 	if paneID == "" {
 		return ""
@@ -177,6 +192,10 @@ func outerClientName() string {
 // in _shpell-session) to the given session and window. No-op when not inside
 // _shpell-session or when no outer client is found.
 func SwitchOuterClientToSessionWindow(session, windowID string) error {
+	if c := popupClient(); c != "" {
+		_, err := run("switch-client", "-c", c, "-t", session+":"+windowID)
+		return err
+	}
 	paneID := PaneID()
 	if paneID == "" {
 		return nil

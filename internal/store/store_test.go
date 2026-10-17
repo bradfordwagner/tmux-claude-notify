@@ -156,3 +156,19 @@ func TestClearOldestUncleared_ConcurrentNoise(t *testing.T) {
 		}
 	}
 }
+
+func TestClearOldestLive_SkipsDeadPanes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for i, pane := range []string{"%1", "%2"} {
+		if err := Append(Record{TS: int64(i + 1), Pane: pane, Window: "@" + pane}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := ClearOldestLive(map[string]bool{"%2": true})
+	if err != nil || r == nil || r.Pane != "%2" {
+		t.Fatalf("got %+v err=%v, want pane %%2", r, err)
+	}
+	if r, _ = ClearOldestLive(map[string]bool{"%2": true}); r != nil {
+		t.Fatalf("expected nil when only dead panes remain, got %+v", r)
+	}
+}

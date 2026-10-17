@@ -102,6 +102,7 @@ Pinned sessions (`p`) float to the top of the Sessions view and also appear in t
 | Option | Default | Description |
 |---|---|---|
 | `@claude-notify-key` | `C-M-p` | Keybinding to open the dashboard |
+| `@claude-notify-popup-mode` | `popup` | How the dashboard opens: `popup` (plain `display-popup`, exits on selection) or `shpell` (grimoire toggleable shpell; needs tmux-grimoire) |
 | `@claude-notify-highlight-color` | `#a6e3a1` | Window tab highlight color when waiting (Catppuccin Mocha green) |
 | `@claude-notify-pop-color` | `#1e1e2e` | Pane background color when waiting (falls back to `@tmux-pop-color`, then `#1e1e2e`) |
 | `@claude-notify-stale-minutes` | `5` | Minutes of transcript inactivity before marking a session stale |
@@ -144,7 +145,9 @@ The sidecar file (`resurrect.json`) is gitignored and lives at `~/.local/share/t
 
 ## Grimoire integration
 
-If [tmux-grimoire](https://github.com/bradfordwagner/tmux-grimoire) is installed, the dashboard opens as a toggleable shpell popup — press `C-M-p` again to close it. Without grimoire, a standard `display-popup` is used.
+By default the dashboard opens in a plain `display-popup`; the binding passes the invoking client (`CN_CLIENT`) so selecting an entry switches the right terminal, then the popup closes. Close it with `q`/`esc`.
+
+To use [tmux-grimoire](https://github.com/bradfordwagner/tmux-grimoire) instead, set `set -g @claude-notify-popup-mode shpell` — the dashboard opens as a toggleable shpell (press `C-M-p` again to close).
 
 ## Local development
 

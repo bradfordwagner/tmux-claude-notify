@@ -243,16 +243,34 @@ func clearAfterGracePeriod(paneID string, delaySecs int) {
 	}
 }
 
+// livePaneSet returns the set of pane IDs in the tmux server, or nil when it
+// cannot be listed (callers then skip liveness filtering).
+func livePaneSet() map[string]bool {
+	panes, err := tmuxclient.ListLivePanes()
+	if err != nil {
+		return nil
+	}
+	set := make(map[string]bool, len(panes))
+	for _, p := range panes {
+		set[p] = true
+	}
+	return set
+}
+
 func runStatus() {
 	records, err := store.ReadAll()
 	if err != nil {
 		return
 	}
+	live := livePaneSet()
+	seen := make(map[string]bool)
 	count := 0
 	for _, r := range records {
-		if !r.Cleared {
-			count++
+		if r.Cleared || seen[r.Pane] || (live != nil && !live[r.Pane]) {
+			continue
 		}
+		seen[r.Pane] = true
+		count++
 	}
 	if count > 0 {
 		bg := tmuxclient.HighlightColor()
@@ -266,7 +284,7 @@ func runStatus() {
 // observe or revert the clear between "find oldest" and "mark cleared" — the
 // gap that let jump repeatedly re-select the same pane.
 func runJump() error {
-	r, err := store.ClearOldestUncleared()
+	r, err := store.ClearOldestLive(livePaneSet())
 	if r == nil {
 		return err
 	}

@@ -562,6 +562,7 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 							_ = tmuxclient.SelectWindow(si.record.TmuxSession, si.record.WindowID)
 							_ = tmuxclient.SwitchOuterClientToSessionWindow(si.record.TmuxSession, si.record.WindowID)
 							_ = tmuxclient.DetachIfShpell()
+							return m, leaveCmd()
 						} else {
 							return m.doResume(si, "neww")
 						}
@@ -636,6 +637,7 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 					m.entries = loadEntries()
 					m.clampCursor()
 					_ = tmuxclient.DetachIfShpell()
+					return m, leaveCmd()
 				}
 			case viewSessions:
 				if m.drillProject == "" {
@@ -655,6 +657,7 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 							_ = tmuxclient.SelectWindow(si.record.TmuxSession, si.record.WindowID)
 							_ = tmuxclient.SwitchOuterClientToSessionWindow(si.record.TmuxSession, si.record.WindowID)
 							_ = tmuxclient.DetachIfShpell()
+							return m, leaveCmd()
 						} else {
 							return m.doResume(si, "neww")
 						}
@@ -712,7 +715,7 @@ func (m model) doResume(si sessionEntry, mode string) (tea.Model, tea.Cmd) {
 	}
 	_ = exec.Command("tmux", args...).Run()
 	_ = tmuxclient.DetachIfShpell()
-	return m, nil
+	return m, leaveCmd()
 }
 
 func (m model) doNewSession(projPath, mode string) (tea.Model, tea.Cmd) {
@@ -753,7 +756,7 @@ func (m model) doNewSession(projPath, mode string) (tea.Model, tea.Cmd) {
 	}
 	_ = exec.Command("tmux", args...).Run()
 	_ = tmuxclient.DetachIfShpell()
-	return m, nil
+	return m, leaveCmd()
 }
 
 func (m model) projPathForRow(row projRow) string {
@@ -1490,4 +1493,13 @@ func Run() error {
 	p := tea.NewProgram(m)
 	_, err = p.Run()
 	return err
+}
+
+// leaveCmd closes the dashboard after a navigation. In a shpell the detach in
+// DetachIfShpell does that; in a plain popup the process must exit.
+func leaveCmd() tea.Cmd {
+	if tmuxclient.InPopup() {
+		return tea.Quit
+	}
+	return nil
 }
