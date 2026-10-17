@@ -164,11 +164,12 @@ func TestClearOldestLive_SkipsDeadPanes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	r, err := ClearOldestLive(map[string]bool{"%2": true})
+	r, err := ClearOldestLive(map[string]string{"%2": "@%2"})
 	if err != nil || r == nil || r.Pane != "%2" {
 		t.Fatalf("got %+v err=%v, want pane %%2", r, err)
 	}
-	if r, _ = ClearOldestLive(map[string]bool{"%2": true}); r != nil {
+	// %1 is live but in a different window now: pane ID reused, record is stale.
+	if r, _ = ClearOldestLive(map[string]string{"%1": "@other"}); r != nil {
 		t.Fatalf("expected nil when only dead panes remain, got %+v", r)
 	}
 }

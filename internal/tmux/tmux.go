@@ -166,6 +166,22 @@ func SwitchOuterClientToSessionWindow(session, windowID string) error {
 	return err
 }
 
+// PaneWindows maps every live pane ID to the window ID it is in. Comparing both
+// guards against pane-ID reuse after a tmux server restart.
+func PaneWindows() (map[string]string, error) {
+	out, err := run("list-panes", "-a", "-F", "#{pane_id} #{window_id}")
+	if err != nil {
+		return nil, err
+	}
+	m := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		if f := strings.Fields(line); len(f) == 2 {
+			m[f[0]] = f[1]
+		}
+	}
+	return m, nil
+}
+
 func ListLivePanes() ([]string, error) {
 	out, err := run("list-panes", "-a", "-F", "#{pane_id}")
 	if err != nil {

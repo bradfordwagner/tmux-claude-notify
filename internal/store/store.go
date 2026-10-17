@@ -150,10 +150,11 @@ func ClearOldestUncleared() (*Record, error) {
 }
 
 // ClearOldestLive is ClearOldestUncleared restricted to records whose pane is
-// in live. Records for dead panes are skipped (left for the dashboard, where
-// the user dismisses them) so a jump never lands on a pane that no longer
-// exists. A nil live set disables the filter.
-func ClearOldestLive(live map[string]bool) (*Record, error) {
+// in live (pane ID → window ID). Records for dead panes, or whose pane ID was
+// reused by a different window, are skipped (left for the dashboard, where the
+// user dismisses them) so a jump never lands on a pane that no longer exists.
+// A nil live map disables the filter.
+func ClearOldestLive(live map[string]string) (*Record, error) {
 	var result *Record
 	err := withStoreLock(func() error {
 		path := LogPath()
@@ -164,7 +165,7 @@ func ClearOldestLive(live map[string]bool) (*Record, error) {
 
 		oldestIdx := -1
 		for i, r := range records {
-			if r.Cleared || (live != nil && !live[r.Pane]) {
+			if r.Cleared || (live != nil && live[r.Pane] != r.Window) {
 				continue
 			}
 			if oldestIdx == -1 || r.TS < records[oldestIdx].TS {

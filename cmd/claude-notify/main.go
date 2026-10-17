@@ -248,18 +248,19 @@ func clearAfterGracePeriod(paneID string, delaySecs int) {
 	}
 }
 
-// livePaneSet returns the set of pane IDs in the tmux server, or nil when it
+// livePaneSet returns pane ID → window ID for the tmux server, or nil when it
 // cannot be listed (callers then skip liveness filtering).
-func livePaneSet() map[string]bool {
-	panes, err := tmuxclient.ListLivePanes()
+func livePaneSet() map[string]string {
+	m, err := tmuxclient.PaneWindows()
 	if err != nil {
 		return nil
 	}
-	set := make(map[string]bool, len(panes))
-	for _, p := range panes {
-		set[p] = true
-	}
-	return set
+	return m
+}
+
+// isLive reports whether r's pane still exists in the window it was recorded in.
+func isLive(live map[string]string, r store.Record) bool {
+	return live == nil || live[r.Pane] == r.Window
 }
 
 // answeredGrace is how long a fresh notification is exempt from transcript
@@ -271,11 +272,11 @@ const answeredGrace = 15 * time.Second
 // user already responded (a user message) or the agent working again. It covers
 // the window where the dashboard watcher is not running. Cleared records are
 // marked in place so the caller's count reflects them.
-func reconcileAnswered(records []store.Record, live map[string]bool) {
+func reconcileAnswered(records []store.Record, live map[string]string) {
 	want := map[string]bool{}
 	now := time.Now().UnixNano()
 	for _, r := range records {
-		if r.Cleared || (live != nil && !live[r.Pane]) || now-r.TS < int64(answeredGrace) {
+		if r.Cleared || !isLive(live, r) || now-r.TS < int64(answeredGrace) {
 			continue
 		}
 		want[r.Pane] = true
@@ -309,7 +310,7 @@ func runStatus() {
 	seen := make(map[string]bool)
 	count := 0
 	for _, r := range records {
-		if r.Cleared || seen[r.Pane] || (live != nil && !live[r.Pane]) {
+		if r.Cleared || seen[r.Pane] || !isLive(live, r) {
 			continue
 		}
 		seen[r.Pane] = true
