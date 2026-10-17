@@ -61,6 +61,12 @@ func main() {
 		switch os.Args[2] {
 		case "notify":
 			_ = desktop.Notify(flags["--backend"], flags["--pane"], flags["--window"])
+			// A clear can land while powershell.exe is still starting: its
+			// History.Remove then runs before Show and the toast would linger.
+			// Re-check the store after showing and retract if already cleared.
+			if has, err := store.HasUnclearedPane(flags["--pane"]); err == nil && !has {
+				_ = desktop.Clear(flags["--backend"], flags["--pane"])
+			}
 		case "clear":
 			_ = desktop.Clear(flags["--backend"], flags["--pane"])
 		}
@@ -144,9 +150,7 @@ func runNotify() error {
 		return err
 	}
 
-	if err := tmuxclient.SetWindowStyle(windowID); err != nil {
-		return err
-	}
+	_ = tmuxclient.SetWindowStyle(windowID)
 	_ = tmuxclient.SetPopStyle(paneID)
 
 	// Detached + bounded: notify-send can hang 60s+ on D-Bus activation.

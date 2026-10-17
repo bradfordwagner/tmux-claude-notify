@@ -102,6 +102,8 @@ User invokes keybinding (C-M-p by default):
                   │                         (Tag "pane-<N>", Group "claude-notify", PowerShell AppID)
                   │            notify-send: notify-send "claude is waiting" "Window: <name>"
                   │            every child bounded by 10s context timeout
+                  │            after Show: store.HasUnclearedPane false → History.Remove
+                  │              (closes race where a clear's child ran before Show)
                   │
                   └──► auto-reset subprocess (when delaySecs > 0 OR navDelaySecs > 0)
                        │  reads @claude-notify-active-reset-seconds (default 15; 0=off)
@@ -212,7 +214,7 @@ internal/
   claude/transcript.go         shared: EncodeProjectPath, LatestTranscriptPath/ID, TranscriptMaxAge (@claude-notify-transcript-age-days, default 14d)
   resurrect/resurrect.go       resurrect.json: Save (snapshot claude panes), Restore (replay --resume into panes)
   desktop/desktop.go           desktop notifications: backend resolve, NotifyAsync/ClearAsync (detached), Windows toast via powershell.exe, notify-send
-  proc/proc.go                 SpawnSelf: detached (Setsid) re-exec of the binary; used by auto-reset + desktop
+  proc/proc.go                 SpawnSelf: detached (Setsid, stdio on /dev/null) re-exec of the binary; used by auto-reset + desktop
   tmux/tmux.go                 tmux command helpers (IsPanePopped: show-options -p window-style → pop indicator)
   setup/setup.go               ~/.claude/settings.json hook check + auto-configure
   watcher/watcher.go           transcript file watcher: state derivation, pane correlation, sessions.Upsert on discovery
