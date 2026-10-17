@@ -42,6 +42,12 @@ tmux bind-key -n "$jump_key" run-shell "'$BINARY' jump"
 # Status-bar segment: appended by default; set @claude-notify-statusline 0 to disable.
 statusline=$(tmux show-option -gqv "@claude-notify-statusline")
 statusline="${statusline:-1}"
+# Strip any existing copies, then append exactly one: re-sourcing tmux.conf
+# re-runs this script, and a blind -ga stacked duplicates ("⚡ 5 ⚡ 5").
+segment=" #('$BINARY' status)"
+status_right="$(tmux show-option -gqv status-right)"
+status_right="${status_right//"$segment"/}"
 if [[ "$statusline" != "0" ]]; then
-  tmux set-option -ga status-right " #('$BINARY' status)"
+  status_right="$status_right$segment"
 fi
+tmux set-option -g status-right "$status_right"

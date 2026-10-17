@@ -44,7 +44,7 @@ func Session(paneID string) (string, error) {
 
 // HighlightColor reads @claude-notify-highlight-color, defaulting to Catppuccin Mocha green.
 func HighlightColor() string {
-	color, _ := run("show-option", "-gqv", "@claude-notify-highlight-color")
+	color := GlobalOption("@claude-notify-highlight-color")
 	if color == "" {
 		color = "#a6e3a1"
 	}
@@ -72,9 +72,9 @@ func ClearWindowStyle(windowID string) error {
 // the side effect of selecting the target pane and moving the user's focus.
 // Color resolution: @claude-notify-pop-color → @tmux-pop-color → dark purple default.
 func SetPopStyle(paneID string) error {
-	color, _ := run("show-option", "-gqv", "@claude-notify-pop-color")
+	color := GlobalOption("@claude-notify-pop-color")
 	if color == "" {
-		color, _ = run("show-option", "-gqv", "@tmux-pop-color")
+		color = GlobalOption("@tmux-pop-color")
 	}
 	if color == "" || color == "black" || color == "colour0" {
 		// Catppuccin Mocha base — visible against a pure-black terminal background.
@@ -271,8 +271,7 @@ func NavClearSeconds() int {
 // seconds. Returns defaultVal if the option is unset or empty, 0 if set to "0",
 // defaultVal if the value is not a valid non-negative integer.
 func readSecondsOption(option string, defaultVal int) int {
-	val, _ := run("show-option", "-gqv", option)
-	val = strings.TrimSpace(val)
+	val := GlobalOption(option)
 	if val == "" {
 		return defaultVal
 	}
@@ -294,9 +293,8 @@ func RefreshStatusBar() {
 	_ = exec.Command("tmux", "refresh-client", "-S").Run()
 }
 
-func NotifySend(windowName string) error {
-	if _, err := exec.LookPath("notify-send"); err != nil {
-		return nil
-	}
-	return exec.Command("notify-send", "claude is waiting", "Window: "+windowName).Run()
+// GlobalOption returns the value of a global tmux option, or "" when unset.
+func GlobalOption(name string) string {
+	val, _ := run("show-option", "-gqv", name)
+	return val
 }
