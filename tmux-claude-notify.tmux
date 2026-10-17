@@ -30,16 +30,19 @@ tmux bind-key -n "$key" run-shell \
 # Quick-jump keybinding: navigates directly to the oldest waiting pane (no dashboard).
 jump_key=$(tmux show-option -gqv "@claude-notify-jump-key")
 jump_key="${jump_key:-C-M-\;}"
-tmux bind-key -n "$jump_key" run-shell "'$BINARY' jump"
+# CN_CLIENT pins the invoking terminal: run-shell has no current client, so with
+# several attached tmux would otherwise switch an arbitrary one.
+tmux bind-key -n "$jump_key" run-shell "CN_CLIENT='#{client_name}' '$BINARY' jump"
 
 # Status-bar segment: appended by default; set @claude-notify-statusline 0 to disable.
 statusline=$(tmux show-option -gqv "@claude-notify-statusline")
 statusline="${statusline:-1}"
 # Strip any existing copies, then append exactly one: re-sourcing tmux.conf
-# re-runs this script, and a blind -ga stacked duplicates ("⚡ 5 ⚡ 5").
+# re-runs this script, and a blind -ga stacked duplicates ("⚡ 5 ⚡ 5"). Copies
+# from any install path are stripped (e.g. TPM clone vs. a dev checkout).
 segment=" #('$BINARY' status)"
 status_right="$(tmux show-option -gqv status-right)"
-status_right="${status_right//"$segment"/}"
+status_right="$(sed -E "s# ?\#\('[^']*/claude-notify' status\)##g" <<<"$status_right")"
 if [[ "$statusline" != "0" ]]; then
   status_right="$status_right$segment"
 fi

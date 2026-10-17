@@ -131,13 +131,20 @@ func SelectWindow(session, windowID string) error {
 // SwitchClientToSessionWindow switches the current client to the given session
 // and activates the specified window within it. Correct for cross-session jumps;
 // switch-client with a bare window ID does not reliably change the active window.
+//
+// Run from run-shell (the jump key) there is no current client, so with several
+// terminals attached tmux picks one arbitrarily; CN_CLIENT pins the invoker.
 func SwitchClientToSessionWindow(session, windowID string) error {
-	_, err := run("switch-client", "-t", session+":"+windowID)
+	args := []string{"switch-client"}
+	if c := popupClient(); c != "" {
+		args = append(args, "-c", c)
+	}
+	_, err := run(append(args, "-t", session+":"+windowID)...)
 	return err
 }
 
-// popupClient returns the client that opened the dashboard popup, passed by the
-// key binding as CN_CLIENT=#{client_name}. Empty outside a plain popup.
+// popupClient returns the client that invoked the dashboard popup or jump key,
+// passed by the key binding as CN_CLIENT. Empty when run directly.
 func popupClient() string {
 	return os.Getenv("CN_CLIENT")
 }
