@@ -224,7 +224,7 @@ func runAutoReset(paneID string, delaySecs, navDelaySecs int) {
 		if uncleared, _ := store.HasUnclearedPane(paneID); !uncleared {
 			return
 		}
-		if tmuxclient.IsShpellOpen() {
+		if tmuxclient.IsDashboardOpen() {
 			continue
 		}
 		if tmuxclient.IsPaneFocused(paneID) {
@@ -241,7 +241,7 @@ func runAutoReset(paneID string, delaySecs, navDelaySecs int) {
 // this — never inline the sleep+clear logic in a new branch.
 func clearAfterGracePeriod(paneID string, delaySecs int) {
 	time.Sleep(time.Duration(delaySecs) * time.Second)
-	if !tmuxclient.IsShpellOpen() {
+	if !tmuxclient.IsDashboardOpen() {
 		if uncleared, _ := store.HasUnclearedPane(paneID); uncleared {
 			_ = runClear(paneID)
 		}
@@ -336,7 +336,6 @@ func runJump() error {
 		return err
 	}
 	_ = tmuxclient.SelectPane(r.Pane)
-	_ = tmuxclient.DetachIfShpell()
 	_ = tmuxclient.SwitchClientToSessionWindow(r.Session, r.Window)
 	_ = tmuxclient.ClearPopStyle(r.Pane)
 	_ = tmuxclient.UnregisterClearHook(r.Pane)

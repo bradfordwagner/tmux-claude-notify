@@ -561,7 +561,6 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 							_ = tmuxclient.SelectPane(si.record.PaneID)
 							_ = tmuxclient.SelectWindow(si.record.TmuxSession, si.record.WindowID)
 							_ = tmuxclient.SwitchOuterClientToSessionWindow(si.record.TmuxSession, si.record.WindowID)
-							_ = tmuxclient.DetachIfShpell()
 							return m, leaveCmd()
 						} else {
 							return m.doResume(si, "neww")
@@ -636,7 +635,6 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 					_ = tmuxclient.SwitchOuterClientToSessionWindow(selected.record.Session, windowID)
 					m.entries = loadEntries()
 					m.clampCursor()
-					_ = tmuxclient.DetachIfShpell()
 					return m, leaveCmd()
 				}
 			case viewSessions:
@@ -656,7 +654,6 @@ func (m model) Update(msg tea.Msg) (ret tea.Model, cmd tea.Cmd) {
 							_ = tmuxclient.SelectPane(si.record.PaneID)
 							_ = tmuxclient.SelectWindow(si.record.TmuxSession, si.record.WindowID)
 							_ = tmuxclient.SwitchOuterClientToSessionWindow(si.record.TmuxSession, si.record.WindowID)
-							_ = tmuxclient.DetachIfShpell()
 							return m, leaveCmd()
 						} else {
 							return m.doResume(si, "neww")
@@ -714,7 +711,6 @@ func (m model) doResume(si sessionEntry, mode string) (tea.Model, tea.Cmd) {
 		args = append(args, "--", "claude", "--resume", si.record.SessionID)
 	}
 	_ = exec.Command("tmux", args...).Run()
-	_ = tmuxclient.DetachIfShpell()
 	return m, leaveCmd()
 }
 
@@ -755,7 +751,6 @@ func (m model) doNewSession(projPath, mode string) (tea.Model, tea.Cmd) {
 		args = append(args, "--", "claude")
 	}
 	_ = exec.Command("tmux", args...).Run()
-	_ = tmuxclient.DetachIfShpell()
 	return m, leaveCmd()
 }
 
@@ -1495,8 +1490,8 @@ func Run() error {
 	return err
 }
 
-// leaveCmd closes the dashboard after a navigation. In a shpell the detach in
-// DetachIfShpell does that; in a plain popup the process must exit.
+// leaveCmd closes the dashboard after a navigation: the popup closes when the
+// process exits.
 func leaveCmd() tea.Cmd {
 	if tmuxclient.InPopup() {
 		return tea.Quit
