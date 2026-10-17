@@ -49,6 +49,26 @@ tasks:
         ln -s "$(pwd)" "{{.PLUGIN_DIR}}"
         echo "linked: {{.PLUGIN_DIR}} -> $(pwd)"
 
+  unlink:
+    desc: Remove dev symlink so TPM installs the native plugin copy
+    vars:
+      PLUGIN_DIR: "{{.HOME}}/.tmux/plugins/tmux-claude-notify"
+    cmds:
+      - |
+        if [ -L "{{.PLUGIN_DIR}}" ]; then
+          rm "{{.PLUGIN_DIR}}"
+          echo "unlinked: {{.PLUGIN_DIR}}"
+        else
+          echo "not a symlink, skipping: {{.PLUGIN_DIR}}"
+        fi
+      - |
+        TPM_INSTALL="{{.HOME}}/.tmux/plugins/tpm/bin/install_plugins"
+        if [ -x "$TPM_INSTALL" ]; then
+          "$TPM_INSTALL"
+        else
+          echo "TPM not found at $TPM_INSTALL, skipping plugin install"
+        fi
+
   setup:
     desc: Verify development dependencies and link plugin directory
     cmds:
