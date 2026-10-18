@@ -119,6 +119,32 @@ func (w *Watcher) Reconcile() []StateChange {
 	return changes
 }
 
+// Snapshot derives the current state of the given panes' transcripts without a
+// running Watcher (no fsnotify, no store writes). Used by the short-lived
+// status/jump processes to spot notifications the user already answered.
+// Only panes in want that are running claude and have a transcript are returned.
+func Snapshot(want map[string]bool) []StateChange {
+	panes, err := listClaudePanes()
+	if err != nil {
+		return nil
+	}
+	home, _ := os.UserHomeDir()
+	projectsDir := filepath.Join(home, ".claude", "projects")
+	var out []StateChange
+	for _, p := range panes {
+		if !want[p.paneID] {
+			continue
+		}
+		transcript := claudepkg.LatestTranscriptPath(filepath.Join(projectsDir, claudepkg.EncodeProjectPath(p.currentPath)))
+		if transcript == "" {
+			continue
+		}
+		status, clear := deriveStatusFromFile(transcript)
+		out = append(out, StateChange{PaneID: p.paneID, WindowID: p.windowID, Session: p.session, Status: status, Clear: clear})
+	}
+	return out
+}
+
 func (w *Watcher) run() {
 	for {
 		select {

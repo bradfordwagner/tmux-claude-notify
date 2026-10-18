@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -121,76 +122,64 @@ func SelectPane(paneID string) error {
 }
 
 // SelectWindow sets the active window in the outer session. Use before
-// DetachIfShpell so the session is on the right window when the popup closes.
+// SwitchOuterClientToSessionWindow so the session is on the right window when the popup closes.
 func SelectWindow(session, windowID string) error {
 	_, err := run("select-window", "-t", session+":"+windowID)
-	return err
-}
-
-// SwitchToWindow switches the current client to a window. Use only when not inside
-// a grimoire shpell (popup fallback path).
-func SwitchToWindow(windowID string) error {
-	_, err := run("switch-client", "-t", windowID)
 	return err
 }
 
 // SwitchClientToSessionWindow switches the current client to the given session
 // and activates the specified window within it. Correct for cross-session jumps;
 // switch-client with a bare window ID does not reliably change the active window.
+//
+// Run from run-shell (the jump key) there is no current client, so with several
+// terminals attached tmux picks one arbitrarily; CN_CLIENT pins the invoker.
 func SwitchClientToSessionWindow(session, windowID string) error {
-	_, err := run("switch-client", "-t", session+":"+windowID)
+	args := []string{"switch-client"}
+	if c := popupClient(); c != "" {
+		args = append(args, "-c", c)
+	}
+	_, err := run(append(args, "-t", session+":"+windowID)...)
 	return err
 }
 
-// outerClientName returns the name of the tmux client that is NOT attached to
-// _shpell-session. Used when running inside the grimoire popup to target the
-// real outer terminal client.
-//
-// #{client_name}/#{client_session} are resolved with an explicit -t <pane>
-// target rather than tmux's implicit current-client lookup, which is
-// ambiguous when invoked from a background process (two clients may be
-// attached at once: the outer terminal and the nested popup client). This
-// mirrors the workaround tmux-grimoire's own shpell.sh applies to itself.
-func outerClientName() string {
-	paneID := PaneID()
-	if paneID == "" {
-		return ""
+// popupClient returns the client that invoked the dashboard popup or jump key,
+// passed by the key binding as CN_CLIENT. Empty when run directly.
+func popupClient() string {
+	return os.Getenv("CN_CLIENT")
+}
+
+// InPopup reports whether the dashboard runs in a display-popup, where exiting
+// the process closes it.
+func InPopup() bool {
+	return popupClient() != ""
+}
+
+// SwitchOuterClientToSessionWindow switches the client that opened the popup to
+// the given session and window. No-op outside the popup (CN_CLIENT unset).
+func SwitchOuterClientToSessionWindow(session, windowID string) error {
+	c := popupClient()
+	if c == "" {
+		return nil
 	}
-	currentClient, err := run("display-message", "-p", "-t", paneID, "#{client_name}")
+	_, err := run("switch-client", "-c", c, "-t", session+":"+windowID)
+	return err
+}
+
+// PaneWindows maps every live pane ID to the window ID it is in. Comparing both
+// guards against pane-ID reuse after a tmux server restart.
+func PaneWindows() (map[string]string, error) {
+	out, err := run("list-panes", "-a", "-F", "#{pane_id} #{window_id}")
 	if err != nil {
-		return ""
+		return nil, err
 	}
-	out, err := run("list-clients", "-F", "#{client_name} #{client_session}")
-	if err != nil {
-		return ""
-	}
+	m := map[string]string{}
 	for _, line := range strings.Split(out, "\n") {
-		parts := strings.SplitN(line, " ", 2)
-		if len(parts) == 2 && parts[0] != currentClient && parts[1] != "_shpell-session" {
-			return parts[0]
+		if f := strings.Fields(line); len(f) == 2 {
+			m[f[0]] = f[1]
 		}
 	}
-	return ""
-}
-
-// SwitchOuterClientToSessionWindow switches the outer tmux client (the one not
-// in _shpell-session) to the given session and window. No-op when not inside
-// _shpell-session or when no outer client is found.
-func SwitchOuterClientToSessionWindow(session, windowID string) error {
-	paneID := PaneID()
-	if paneID == "" {
-		return nil
-	}
-	currentSession, err := run("display-message", "-p", "-t", paneID, "#{client_session}")
-	if err != nil || currentSession != "_shpell-session" {
-		return nil
-	}
-	outerClient := outerClientName()
-	if outerClient == "" {
-		return nil
-	}
-	_, err = run("switch-client", "-c", outerClient, "-t", session+":"+windowID)
-	return err
+	return m, nil
 }
 
 func ListLivePanes() ([]string, error) {
@@ -204,39 +193,18 @@ func ListLivePanes() ([]string, error) {
 	return strings.Split(out, "\n"), nil
 }
 
-// OuterSession returns the session the real outer tmux client (the one not
-// attached to _shpell-session) is actually attached to. Used to target
-// split-window commands at the user's real session when the dashboard is
-// running inside the grimoire popup.
-//
-// This resolves via outerClientName() rather than picking the first entry
-// from `list-sessions`, which picked an arbitrary session whenever more than
-// one non-_shpell-session session was attached (e.g. the popup was opened
-// from "k8s" but list-sessions returned "edit" first).
+// OuterSession returns the session of the client that opened the popup, used to
+// target split-window/new-window at the user's real session. Empty outside it.
 func OuterSession() string {
-	client := outerClientName()
-	if client == "" {
+	c := popupClient()
+	if c == "" {
 		return ""
 	}
-	session, err := run("display-message", "-p", "-t", client, "#{client_session}")
+	session, err := run("display-message", "-p", "-t", c, "#{client_session}")
 	if err != nil {
 		return ""
 	}
 	return session
-}
-
-// DetachIfShpell calls detach-client when running inside grimoire's _shpell-session,
-// which triggers grimoire's cleanup hook and closes the popup.
-func DetachIfShpell() error {
-	session, err := run("display-message", "-p", "#{client_session}")
-	if err != nil {
-		return err
-	}
-	if session == "_shpell-session" {
-		_, err = run("detach-client")
-		return err
-	}
-	return nil
 }
 
 // IsPaneFocused returns true when the given pane is the user's currently active
@@ -248,11 +216,20 @@ func IsPaneFocused(paneID string) bool {
 	return err == nil && out == "11"
 }
 
-// IsShpellOpen returns true when the grimoire shpell popup session is live,
-// meaning the claude-notify dashboard is currently displayed.
-func IsShpellOpen() bool {
-	_, err := exec.Command("tmux", "has-session", "-t", "_shpell-session").Output()
-	return err == nil
+// IsDashboardOpen returns true when a dashboard process (the binary run with no
+// subcommand) is alive, e.g. in the popup. Auto-reset skips clearing then.
+func IsDashboardOpen() bool {
+	out, err := exec.Command("ps", "-eo", "args=").Output()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 1 && filepath.Base(f[0]) == "claude-notify" {
+			return true
+		}
+	}
+	return false
 }
 
 // ActiveResetSeconds reads @claude-notify-active-reset-seconds from global tmux

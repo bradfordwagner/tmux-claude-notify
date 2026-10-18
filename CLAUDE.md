@@ -43,6 +43,10 @@ When `claude` finishes a response and returns to the prompt, the Claude Code `St
 5. Sets `window-active-style bg=<color>` (pane background pop)
 6. Spawns a detached `claude-notify desktop notify` child (10s timeout) for the desktop notification: Windows toast under WSL, `notify-send` elsewhere (`@claude-notify-desktop`). Never block the hook on this — `notify-send` hangs ~66s on WSL2 D-Bus activation
 
+### Clear paths while the dashboard is closed
+
+The `UserPromptSubmit` hook runs `claude-notify clear` (pane from `$TMUX_PANE`) the moment the user answers. As a backstop, `status` and `jump` call `reconcileAnswered`, which uses `watcher.Snapshot` to clear uncleared live-pane entries whose transcript shows a user message or running agent (15s grace after the notification).
+
 ### Transcript watcher (while dashboard is open)
 
 When the dashboard TUI starts, it launches a transcript watcher that reads Claude Code's own JSONL session files at `~/.claude/projects/<encoded-path>/<session-id>.jsonl`. The watcher:
@@ -71,7 +75,8 @@ The binary auto-configures this on first run, but the correct schema is:
 ```json
 {
   "hooks": {
-    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "/path/to/bin/claude-notify notify"}]}]
+    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "/path/to/bin/claude-notify notify"}]}],
+    "UserPromptSubmit": [{"matcher": "", "hooks": [{"type": "command", "command": "/path/to/bin/claude-notify clear"}]}]
   }
 }
 ```
@@ -83,39 +88,9 @@ $TMUX_PANE    # e.g. %34 — inherited from shell that launched claude; identifi
 $TMUX         # socket path — confirms we're inside a tmux session
 ```
 
-## Grimoire shpell layout and buffer capture
+## Dashboard popup
 
-`C-M-p` launches the dashboard inside a grimoire shpell. Understanding the layout matters for scripting against it.
-
-```
-Your session (e.g. "main")
-├── window 0: vim                  ← normal work
-└── window: cn                     ← placeholder window (swapped in while popup is open)
-
-_shpell-session                    ← temporary session, lives only while popup is open
-└── window: cn                     ← where bin/claude-notify actually runs
-    └── pane                       ← bubbletea TUI renders here
-
-[display-popup overlay]            ← what you see: attaches to _shpell-session
-```
-
-The window is swapped between `_shpell-session` and your session via `tmux swap-window`. When you toggle off (`C-M-p` again), a hook swaps it back and kills `_shpell-session`. The placeholder window preserves pane history.
-
-### Capturing the shpell buffer
-
-```bash
-# While shpell popup is open — reads the live TUI output:
-tmux capture-pane -t "_shpell-session:cn" -p
-
-# From your own session when popup is closed — reads the placeholder window:
-tmux capture-pane -t "$(tmux list-windows -F '#{session_name}:#{window_name}' | grep ':cn$')" -p
-
-# To identify which pane the dashboard is showing as selected/active:
-# Parse the captured buffer — the selected entry is prefixed with "> " by the TUI
-tmux capture-pane -t "_shpell-session:cn" -p | grep "^> "
-```
-
-The `> ` prefix identifies the currently highlighted entry. Use this to script "jump to active claude pane" without user interaction.
+`C-M-p` runs `run-shell "tmux display-popup -c '#{client_name}' -E ... \"CN_CLIENT='#{client_name}' bin/claude-notify\""`. `display-popup` does not expand formats in its command, `run-shell` does. The binary runs directly in the popup (no nested session or window swap) and uses `CN_CLIENT` to switch the invoking client; exiting the process closes the popup. Grimoire shpells are not supported.
 
 ## Dotfiles integration
 

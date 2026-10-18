@@ -21,32 +21,28 @@ fi
 key=$(tmux show-option -gqv "@claude-notify-key")
 key="${key:-C-M-p}"
 
-# Use grimoire's custom_shpell if installed (check by path to avoid TPM load-order issues).
-# Grimoire handles toggle by detecting _shpell-session and calling detach-client.
-# Fall back to tmux popup if grimoire is not present.
-GRIMOIRE_SHPELL="${HOME}/.tmux/plugins/tmux-grimoire/bin/custom_shpell"
-if [[ -x "$GRIMOIRE_SHPELL" ]]; then
-  # cd into the plugin dir first so a manual restart from the pane (after the
-  # dashboard exits) is just `bin/claude-notify` instead of the full path.
-  CMD="cd $PLUGIN_DIR && bin/claude-notify"
-  tmux bind-key -n "$key" run-shell "$GRIMOIRE_SHPELL standard cn '$CMD'"
-else
-  tmux bind-key -n "$key" popup -E -w 80% -h 80% "$BINARY"
-fi
+# Dashboard launcher: a display-popup running the binary directly. CN_CLIENT (the
+# invoking client) lets it switch the right terminal. display-popup does not
+# expand formats in its command, run-shell does: it bakes the client name in.
+tmux bind-key -n "$key" run-shell \
+  "tmux display-popup -c '#{client_name}' -E -w 80% -h 80% -b rounded -T ' claude-notify ' \"CN_CLIENT='#{client_name}' '$BINARY'\""
 
 # Quick-jump keybinding: navigates directly to the oldest waiting pane (no dashboard).
 jump_key=$(tmux show-option -gqv "@claude-notify-jump-key")
 jump_key="${jump_key:-C-M-\;}"
-tmux bind-key -n "$jump_key" run-shell "'$BINARY' jump"
+# CN_CLIENT pins the invoking terminal: run-shell has no current client, so with
+# several attached tmux would otherwise switch an arbitrary one.
+tmux bind-key -n "$jump_key" run-shell "CN_CLIENT='#{client_name}' '$BINARY' jump"
 
 # Status-bar segment: appended by default; set @claude-notify-statusline 0 to disable.
 statusline=$(tmux show-option -gqv "@claude-notify-statusline")
 statusline="${statusline:-1}"
 # Strip any existing copies, then append exactly one: re-sourcing tmux.conf
-# re-runs this script, and a blind -ga stacked duplicates ("⚡ 5 ⚡ 5").
+# re-runs this script, and a blind -ga stacked duplicates ("⚡ 5 ⚡ 5"). Copies
+# from any install path are stripped (e.g. TPM clone vs. a dev checkout).
 segment=" #('$BINARY' status)"
 status_right="$(tmux show-option -gqv status-right)"
-status_right="${status_right//"$segment"/}"
+status_right="$(sed -E "s# ?\#\('[^']*/claude-notify' status\)##g" <<<"$status_right")"
 if [[ "$statusline" != "0" ]]; then
   status_right="$status_right$segment"
 fi

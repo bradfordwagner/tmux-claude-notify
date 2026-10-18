@@ -32,9 +32,7 @@ TPM load time (tmux startup):
   ├─ go build -o bin/claude-notify ./cmd/claude-notify  (if stale)
   │   └─ on failure: tmux display-message error, exit 1
   ├─ tmux bind-key <@claude-notify-key|C-M-p>
-  │   ├─ if ~/.tmux/plugins/tmux-grimoire/bin/custom_shpell exists:
-  │   │   └─ run-shell "custom_shpell standard cn 'cd <plugin-dir> && bin/claude-notify'"
-  │   └─ else: popup -E -w 80% -h 80% "bin/claude-notify"
+  │   └─ run-shell "tmux display-popup -c #{client_name} -E \"CN_CLIENT=#{client_name} bin/claude-notify\""  (run-shell expands formats; display-popup does not)
   ├─ tmux bind-key <@claude-notify-jump-key|C-M-;>
   │   └─ run-shell "bin/claude-notify jump"   (non-interactive: no dashboard)
   └─ unless @claude-notify-statusline == "0":
@@ -55,14 +53,14 @@ User invokes keybinding (C-M-p by default):
   └─ bubbletea TUI  (fsnotify auto-refresh; transcript watcher; Tab to switch views)
       ├─ Notifications view  (default): notifications + active sessions + pinned idle sessions
       │   │   columns: STATUS | PIN | P (pop indicator ● when pane-local bg pop active) | WINDOW | PATH | SESSION | AGE
-      │   ├─ enter: clear notification + SelectWindow + DetachIfShpell
+      │   ├─ enter: clear notification + SelectWindow + tea.Quit
       │   ├─ p: pin/unpin session via sessions.SetPinned
       │   └─ tab: switch to Sessions view
       ├─ Sessions view: all sessions grouped by project (📌 Pinned group first, then alpha)
       │   ├─ s: cycle within-group sort (age ↔ status)
       │   ├─ f: toggle filter to active panes only (pinned always shown)
       │   ├─ p: pin/unpin session via sessions.SetPinned
-      │   ├─ enter/w (active pane): SelectPane + SelectWindow + DetachIfShpell
+      │   ├─ enter/w (active pane): SelectPane + SelectWindow + tea.Quit
       │   ├─ enter/w (closed session): sessions.RecoverPath → tmux neww -c <path> -t <outer> -- claude --resume <uuid>
       │   ├─ h/v (closed session): split-window -h/-v -c <path> -t <outer> -- claude --resume <uuid>
       │   ├─ w/h/v (L1 project row): tmux neww/split-window -c <path> -t <outer> -- claude  (fresh session, -n <leaf> for neww)
@@ -71,7 +69,7 @@ User invokes keybinding (C-M-p by default):
       │   ├─ state change → running/waiting/stale → UpdateStatus or Append
       │   └─ user message  → ClearPane + ClearWindowStyle (user responded)
       │                        + desktop.ClearAsync only if pane had an uncleared entry
-      └─ q/esc → close transcript watcher + DetachIfShpell → tea.Quit
+      └─ q/esc → close transcript watcher → tea.Quit
 ```
 
 ## Data Flow: Notification Lifecycle
@@ -113,13 +111,13 @@ User invokes keybinding (C-M-p by default):
                                 │  args: --pane <id> --delay <activeResetSecs> --nav-delay <navClearSecs>
                                 │
                                 ├─ IsPaneFocused? (window_active=1 AND pane_active=1)
-                                │     yes, delaySecs > 0 → sleep delaySecs → check IsShpellOpen + HasUnclearedPane → runClear
+                                │     yes, delaySecs > 0 → sleep delaySecs → check IsDashboardOpen + HasUnclearedPane → runClear
                                 │     yes, delaySecs = 0 → exit (already-focused clear disabled)
                                 │
                                 └─ not focused (different pane or different window)
                                       poll every 2s (up to 4h):
                                       ├─ HasUnclearedPane? no → exit (cleared by other means)
-                                      ├─ IsShpellOpen? yes → continue (dashboard handles it)
+                                      ├─ IsDashboardOpen? yes → continue (dashboard handles it)
                                       └─ IsPaneFocused? (window_active=1 AND pane_active=1)
                                             yes, navDelaySecs > 0 → sleep navDelaySecs → runClear
                                             yes, navDelaySecs = 0 → exit (nav-clear disabled)
@@ -165,7 +163,8 @@ User invokes keybinding (C-M-p by default):
       ├──► UnregisterClearHook
       ├──► SelectPane                 (makes the notified pane active in its window)
       ├──► SelectWindow               (outer session switches to that window)
-      └──► DetachIfShpell             (closes grimoire popup)
+      ├──► SwitchOuterClientToSessionWindow (switch-client -c $CN_CLIENT)
+      └──► tea.Quit                   (process exit closes the popup)
 ```
 
 ## Hook Configuration
@@ -174,7 +173,14 @@ One hook in `~/.claude/settings.json` calls `claude-notify notify`:
 
 | Hook | When it fires |
 |---|---|
-| `Stop` | Claude finishes its response turn and returns to the user prompt |
+| `Stop` | Claude finishes its response turn and returns to the user prompt → `claude-notify notify` |
+| `UserPromptSubmit` | User submits a prompt → `claude-notify clear` (clears this pane via `$TMUX_PANE`) |
+
+The `status` and `jump` subcommands also self-heal while the dashboard is closed:
+`reconcileAnswered` calls `watcher.Snapshot` (one-shot transcript read, no fsnotify)
+for uncleared live panes older than 15s and clears any whose transcript shows a user
+message or running agent. The 15s grace avoids clearing a fresh notification when the
+Stop hook fires before Claude Code flushes the final assistant event.
 
 The Stop hook is a fallback: it writes to JSONL when the dashboard is closed. While
 the dashboard is open, the transcript watcher provides richer real-time state.
@@ -254,7 +260,7 @@ DEVELOPMENT.md                 ordered development items
  User opens/resumes session (w/h/v in Sessions view)
       ├─ L1 project row: OuterSession() → tmux neww/split-window -c <path> -t <outer> -- claude  (fresh)
       └─ L2 closed session: OuterSession() → tmux neww/split-window -c <path> -t <outer> -- claude --resume <session_id>
-          └─► DetachIfShpell (close popup)
+          └─► tea.Quit (close popup)
 ```
 
 ## Data Flow: Resurrect
@@ -307,8 +313,8 @@ DEVELOPMENT.md                 ordered development items
 | Hook install | auto-write if missing, read-only check otherwise | friction of manual setup outweighs risk of touching user file |
 | Pane pop | `set-option -p window-style bg=<color>` (pane-scoped) | targets the specific notified pane without selecting it; `select-pane -P` moves user cursor focus as a side effect in tmux 3.7b |
 | Pop color | `@claude-notify-pop-color` → `@tmux-pop-color` → `#1e1e2e` fallback | visible on black terminal; compatible with Catppuccin Mocha |
-| Dashboard keybinding | grimoire shpell if present, `display-popup` fallback | grimoire provides native toggle (C-M-p again to close); popup requires explicit q/esc |
-| Dashboard selection | stay open until list empty, then DetachIfShpell | allows handling multiple pending notifications in one session |
+| Dashboard keybinding | plain `display-popup` via `run-shell` | popup passes exact client via `CN_CLIENT`; no nested session/window swap (grimoire shpell support dropped) |
+| Dashboard selection | stay open until list empty, then tea.Quit | allows handling multiple pending notifications in one session |
 | Auto-clear hook | none (removed) | pane-focus-in broken in WSL2; after-select-window fires on any tmux command |
 | Active-pane auto-reset | detached subprocess spawned when either delay > 0; `@claude-notify-active-reset-seconds` (default 15; 0=off) | clears pop after grace period when user was already in the pane at notify time |
 | Navigate-to-clear | polling subprocess uses `@claude-notify-nav-clear-seconds` (default 2; 0=off) for poll-detected focus | entering a popped pane feels instant (2s); separate from grace period so "already watching" and "navigated to" are tuned independently |

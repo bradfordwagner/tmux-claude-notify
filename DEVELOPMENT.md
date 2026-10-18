@@ -56,7 +56,7 @@ Implementation order follows dependency constraints: scaffolding and storage fir
 - [x] 7.1 `tmux-claude-notify.tmux` — detect stale/missing binary and build
 - [x] 7.2 Surface build failure via `tmux display-message`
 - [x] 7.3 Read `@claude-notify-key` TPM option, default `C-M-p`
-- [x] 7.4 If `~/.tmux/plugins/tmux-grimoire/bin/custom_shpell` exists, bind key via grimoire (toggleable shpell); else fall back to `popup -E -w 80% -h 80%`
+- [x] 7.4 (grimoire support later dropped; popup only) If `~/.tmux/plugins/tmux-grimoire/bin/custom_shpell` exists, bind key via grimoire (toggleable shpell); else fall back to `popup -E -w 80% -h 80%`
 
 ## 8. Documentation
 

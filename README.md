@@ -47,14 +47,15 @@ git clone https://github.com/bradfordwagner/tmux-claude-notify \
 
 ## Hook setup
 
-No manual action required. On first dashboard open, `claude-notify` automatically adds the `Stop` hook to `~/.claude/settings.json` and shows a brief toast confirmation.
+No manual action required. On first dashboard open, `claude-notify` automatically adds the `Stop` and `UserPromptSubmit` hooks to `~/.claude/settings.json` and shows a brief toast confirmation.
 
 For dotfile-managed setups (Ansible, chezmoi, etc.), the hook entry looks like:
 
 ```json
 {
   "hooks": {
-    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "/path/to/bin/claude-notify notify"}]}]
+    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "/path/to/bin/claude-notify notify"}]}],
+    "UserPromptSubmit": [{"matcher": "", "hooks": [{"type": "command", "command": "/path/to/bin/claude-notify clear"}]}]
   }
 }
 ```
@@ -142,9 +143,9 @@ set -g @resurrect-hook-post-restore-all '~/.tmux/plugins/tmux-claude-notify/bin/
 
 The sidecar file (`resurrect.json`) is gitignored and lives at `~/.local/share/tmux-claude-notify/resurrect.json`.
 
-## Grimoire integration
+## Dashboard popup
 
-If [tmux-grimoire](https://github.com/bradfordwagner/tmux-grimoire) is installed, the dashboard opens as a toggleable shpell popup — press `C-M-p` again to close it. Without grimoire, a standard `display-popup` is used.
+The dashboard opens in a `display-popup`; the binding passes the invoking client (`CN_CLIENT`) so selecting an entry switches the right terminal, then the popup closes. Close it with `q`/`esc`. tmux-grimoire shpells are no longer supported.
 
 ## Local development
 
